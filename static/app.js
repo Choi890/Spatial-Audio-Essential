@@ -3811,9 +3811,9 @@ function createFullSpatialStemReflectionLayer(context, input, stem, output) {
 }
 
 function getSymmetricStemReflectionTapPlan(taps = []) {
-  return getCoherentStemTapPlan(taps)
+  const groups = getCoherentStemTapPlan(taps)
     .filter((tap) => !tap.anchor)
-    .flatMap((tap) => {
+    .map((tap) => {
       const azimuth = Math.abs(normalizeDegrees(tap.azimuth || 0));
       if (azimuth < 4 || azimuth > 176) return [{ ...tap, azimuth: normalizeDegrees(tap.azimuth || 0) }];
       const pairGain = tap.gain * Math.SQRT1_2;
@@ -3822,6 +3822,9 @@ function getSymmetricStemReflectionTapPlan(taps = []) {
         { ...tap, id: `${tap.id || "reflection"}-right`, azimuth, gain: pairGain }
       ];
     });
+  // 품질 단계가 탭 수를 줄여도 좌우 방향쌍 중 한쪽만 잘리지 않게 쌍을 먼저 배치한다.
+  return groups.filter((group) => group.length === 2).flat()
+    .concat(groups.filter((group) => group.length !== 2).flat());
 }
 
 function createPhasePreservingStereoPrimaryLayer(context, input, output, gainValue = 1, id = "primary", channelCount = 2) {

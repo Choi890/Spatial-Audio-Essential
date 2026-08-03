@@ -705,6 +705,9 @@ test("keeps analysis visible when browser audio decoding fails", async ({ page }
 
 test("renders Demucs stems with inferred stage positions", async ({ page }, testInfo) => {
   const errors = collectBrowserErrors(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "hardwareConcurrency", { configurable: true, value: 2 });
+  });
   await page.route("**/api/analyze?**", async (route) => {
     await route.fulfill({
       status: 200,
@@ -1393,10 +1396,10 @@ test("keeps Original playback raw with device correction selected while stem dis
   await page.waitForTimeout(500);
   const originalGraph = await page.evaluate(() => ({
     hasDeviceCorrection: Object.prototype.hasOwnProperty.call(state.graph || {}, "deviceCorrection"),
-    masterGain: state.graph?.master?.gain.value,
+    outputGainScale: state.graph?.outputGainScale,
     mode: state.graph?.mode
   }));
-  expect(originalGraph).toEqual({ hasDeviceCorrection: false, masterGain: 1, mode: "original" });
+  expect(originalGraph).toEqual({ hasDeviceCorrection: false, outputGainScale: 1, mode: "original" });
   let levels = await page.evaluate(() => ({
     row: Number.parseFloat(document.querySelector(".instrument-row[data-id='other']")?.style.getPropertyValue("--level") || "0"),
     field: Number.parseFloat(document.querySelector(".stage-node[data-id='other']")?.style.getPropertyValue("--level") || "0")
