@@ -122,6 +122,8 @@ HQ 렌더 결과는 IndexedDB에 8MB 단위 chunk로 저장됩니다. 입력 파
 
 ## 실행 방법
 
+새 PC에서는 먼저 `Necessary Package Download.cmd`를 더블클릭합니다. 이 설치 런처는 Python 3.12와 FFmpeg를 확인하고, 없으면 공식 winget 패키지로 설치합니다. 이후 `.venv`를 만들고 기본 분석 패키지와 PC에 맞는 NVIDIA CUDA/CPU Demucs 패키지를 설치한 뒤 공간음향 자산까지 검증합니다.
+
 프로젝트 루트의 다음 파일을 더블클릭하면 Python 분석 서버가 시작되고 브라우저가 자동으로 열립니다.
 
 ```text
@@ -145,6 +147,18 @@ http://127.0.0.1:8768/
 
 ## 설치
 
+### 권장 자동 설치
+
+```text
+Necessary Package Download.cmd
+```
+
+기본 패키지만 설치하고 싶은 고급 사용자는 명령 프롬프트에서
+`Necessary Package Download.cmd -SkipMl`을 실행할 수 있습니다. FFmpeg 자동 설치도
+건너뛰려면 `-SkipFfmpeg`를 함께 사용합니다.
+
+수동 설치가 필요한 환경에서는 아래 명령을 사용합니다.
+
 ### 기본 패키지
 
 ```powershell
@@ -155,6 +169,12 @@ pip install -r requirements.txt
 
 ```powershell
 pip install -r requirements-ml.txt
+```
+
+### NVIDIA GPU가 없는 PC의 Demucs 패키지
+
+```powershell
+pip install -r requirements-ml-cpu.txt
 ```
 
 ### JavaScript 테스트 환경

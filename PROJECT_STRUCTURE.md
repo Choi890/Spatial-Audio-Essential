@@ -48,6 +48,9 @@
 | `data/brir/aula_carolina_front_3m_90deg_late.wav` | Aula Carolina 3m 정면 측정에서 만든 45ms–2.8s binaural late field |
 | `tools/build_air_brir.py` | AIR MAT 원본 두 채널을 bounded stereo late-field WAV로 재현하는 빌드 도구 |
 | `Spatial Audio Essential 실행.cmd` | Windows 원클릭 실행 |
+| `Necessary Package Download.cmd` | 새 PC용 필수 패키지 설치 런처 |
+| `Necessary Package Download.ps1` | Python 3.12·가상환경·Demucs·FFmpeg 자동 설치와 진단 |
+| `requirements-ml-cpu.txt` | NVIDIA GPU가 없는 PC용 CPU Demucs 의존성 |
 
 ## Full Spatial stem 배치
 
