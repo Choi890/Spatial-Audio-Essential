@@ -9,8 +9,8 @@
     },
     {
       "path": "brir/profiles.json",
-      "size": 2345,
-      "sha256": "1847db54c16c7c7527019c78a4ea8a306c3a15425b646420f48bd2ec2a88dfac",
+      "size": 2286,
+      "sha256": "b7fb4522e8bec9bd5faa44655ab24fcd4c8c045a6aebc5229a5a44a5f73abfec",
       "required": true
     },
     {
@@ -45,8 +45,8 @@
     },
     {
       "path": "hrtf/profiles.json",
-      "size": 1290,
-      "sha256": "4964e956b73c47ccfd530635236bf64c475ae68b2a63b106d9cf54d4ef485db4",
+      "size": 1244,
+      "sha256": "053591f47d8534cefd9ed557becc95956fde4e0dd8776f0dcdd51b86ee615afa",
       "required": true
     },
     {
@@ -57,8 +57,8 @@
     },
     {
       "path": "hrtf/sadie-human-003.json",
-      "size": 16536,
-      "sha256": "b8f1b3d00086c0a98284b9eba1688eed751472298b4fc16ddc387f13f971d0df",
+      "size": 15643,
+      "sha256": "ef706bf88052ddf2f1575b40b11d44e57654ed2d5438fe197c74e339bef59e9d",
       "required": true
     },
     {
@@ -69,8 +69,8 @@
     },
     {
       "path": "hrtf/sadie-human-009.json",
-      "size": 16536,
-      "sha256": "7a08d65ffcd541fb12ef6a9a0c0598b155d254a6eae5aecf33f170d0d66e6677",
+      "size": 15643,
+      "sha256": "963ed7f79ff675feecfb13fc6d5e84d9a55333e1a4c8e4e465e5c2720ec75a73",
       "required": true
     },
     {
@@ -81,8 +81,8 @@
     },
     {
       "path": "hrtf/sadie-kemar.json",
-      "size": 139778,
-      "sha256": "c840417c3120e8ae1ebb908693a1f872b438924cb0217f3b33de483c0e6fc9f1",
+      "size": 131985,
+      "sha256": "69d8a8c108562c083985a04f2398cbfbd30b0d2d31bb2f28f876172a3a4b2144",
       "required": true
     },
     {
@@ -93,8 +93,8 @@
     },
     {
       "path": "hrtf/sadie-ku100.json",
-      "size": 139778,
-      "sha256": "9ee6840744293e4d8abdc8aac45ee42728f6acf3df88a6677336d9b0ff377143",
+      "size": 131985,
+      "sha256": "273a626e01ac268ebe4564063c4fdb8e79eea22e90f53eebe395547dfed318f5",
       "required": true
     },
     {
@@ -105,8 +105,8 @@
     },
     {
       "path": "hrtf/universal-listener-v1.json",
-      "size": 14280,
-      "sha256": "b88b4e26db80445608818e139ea0ee1be1b926bbd45b01ffb1719af0c452c133",
+      "size": 13516,
+      "sha256": "c0bdd1383e1a0440291bd53c5491da0981a40a95aaa2e809f8fa9217ef625ecd",
       "required": true
     },
     {

@@ -1,4 +1,4 @@
 # 측정 자산은 manifest의 SHA-256으로 검증하므로 체크아웃 시 바이트를 변환하지 않는다.
-data/assets-manifest.json -text
+data/assets-manifest.json text eol=lf
 data/brir/** -text
 data/hrtf/** -text
