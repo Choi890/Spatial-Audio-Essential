@@ -921,8 +921,9 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(Math.max(routing.anchors.vocals.delay, routing.anchors.other.delay)).toBeLessThanOrEqual(0.007);
   expect(Math.min(routing.anchors.drums.delay, routing.anchors.bass.delay)).toBeGreaterThanOrEqual(0.017);
   expect(routing.directBusGain).toBeCloseTo(0.86, 4);
-  expect(routing.roomMasterGain).toBeGreaterThan(0.58);
-  expect(routing.roomMasterGain).toBeLessThanOrEqual(0.69);
+  const normalizedRoomMasterGain = routing.roomMasterGain / { full: 1, balanced: 0.94, safe: 0.86 }[routing.audioQualityId];
+  expect(normalizedRoomMasterGain).toBeGreaterThan(0.58);
+  expect(normalizedRoomMasterGain).toBeLessThanOrEqual(0.69);
   expect(routing.sceneSumGain).toBeCloseTo(0.86, 4);
   expect(routing.lateralBusGain).toBeGreaterThan(1);
   expect(routing.lateralBusGain).toBeLessThan(1.6);

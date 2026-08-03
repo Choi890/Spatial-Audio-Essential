@@ -40,7 +40,12 @@ module.exports = defineConfig({
       testIgnore: "**/webkit-smoke.spec.js",
       use: {
         ...devices["Desktop Firefox"],
-        firefoxUserPrefs: { "media.autoplay.default": 0 }
+        firefoxUserPrefs: {
+          "media.autoplay.default": 0,
+          "media.autoplay.blocking_policy": 0,
+          "media.autoplay.enabled.user-gestures-needed": false,
+          "media.block-autoplay-until-in-foreground": false
+        }
       }
     },
     {
