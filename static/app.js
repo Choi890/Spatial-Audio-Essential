@@ -59,7 +59,6 @@ const SPATIAL_SPACE_MULTIPLIER = 3.2;  //공간 크기는 유지하되 짧은 �
 const SPATIAL_WIDTH_MULTIPLIER = 2.8;  //원본 stereo image를 보존하는 완만한 좌우 확장
 const SPATIAL_DISTANCE_ENVELOPMENT = 2.8;  //과도한 원거리 좌표 포화를 피하는 거리 배율
 const SPATIAL_SIDE_ENERGY_SCALE = 1.8;  //원본 side 신호보다 낮은 보조 확장 레이어
-const MEASURED_BRIR_URL = "/brir/aula_carolina_front_3m_90deg_late.wav";
 const HRTF_LIBRARY_URL = "/hrtf/profiles.json";
 const DEFAULT_HRTF_PROFILE_ID = "sadie-kemar";
 const SPATIAL_OUTPUT_PEAK_GUARD_PRE_GAIN = 0.94;

@@ -395,7 +395,7 @@ test("exposes production health, security headers, and accessible progress", asy
   expect(headers["cache-control"]).toContain("no-store");
   expect(headers["x-request-id"]).toMatch(/^[a-f0-9]{16}$/);
 
-  const brir = await page.request.get("/brir/aula_carolina_front_3m_90deg_late.wav");
+  const brir = await page.request.get("/brir/air_aula_carolina_front_late.wav");
   expect(brir.ok()).toBe(true);
   expect(brir.headers()["content-type"]).toContain("audio");
   expect(brir.headers()["cache-control"]).toContain("immutable");
@@ -482,7 +482,7 @@ test("keeps Spatial gain staging in the fidelity-safe range", async ({ page, bro
     const script = await fetch("/app.js").then((response) => response.text());
     const sampleRate = 48000;
     const offline = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, sampleRate, sampleRate);
-    const brirBytes = await fetch(MEASURED_BRIR_URL).then((response) => response.arrayBuffer());
+    const brirBytes = await fetch(DEFAULT_MEASURED_BRIR_URL).then((response) => response.arrayBuffer());
     state.measuredBrirBuffer = await offline.decodeAudioData(brirBytes.slice(0));
     const testBuffer = offline.createBuffer(2, sampleRate, sampleRate);
     for (let channel = 0; channel < 2; channel += 1) {
@@ -592,7 +592,7 @@ test("keeps Spatial gain staging in the fidelity-safe range", async ({ page, bro
   expect(values.decorrelatorMonoError).toBeLessThan(1e-7);
   expect(values.decorrelatorMonoCancelling).toBe(true);
   expect(values.measuredBrirChannels).toBe(2);
-  expect(values.measuredBrirDuration).toBeCloseTo(2.8, 1);
+  expect(values.measuredBrirDuration).toBeCloseTo(3.2, 1);
   expect(values.sideLift).toBeLessThanOrEqual(1.05);
   expect(values.outputTrim).toBeGreaterThanOrEqual(spatialRendererGolden.outputTrim[0]);
   expect(values.centerDelayScale).toBeGreaterThan(1.1);
@@ -893,7 +893,11 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
       .map((gain) => gain.gain.value)
   }));
   expect(routing.ids).toEqual(["vocals", "other", "drums", "bass"]);
-  expect(routing.tapCounts).toEqual({ vocals: 4, other: 5, drums: 6, bass: 4 });
+  expect(routing.tapCounts).toEqual({
+    full: { vocals: 4, other: 5, drums: 6, bass: 4 },
+    balanced: { vocals: 4, other: 4, drums: 6, bass: 4 },
+    safe: { vocals: 2, other: 4, drums: 4, bass: 2 }
+  }[routing.audioQualityId]);
   expect(routing.diffuseHighpasses).toEqual({
     vocals: 900,
     other: 650,
@@ -1129,7 +1133,7 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
       calibration: state.playbackCalibration,
       quality: state.audioQualityTier
     };
-    const brirBytes = await fetch(MEASURED_BRIR_URL).then((response) => response.arrayBuffer());
+    const brirBytes = await fetch(DEFAULT_MEASURED_BRIR_URL).then((response) => response.arrayBuffer());
     state.measuredBrirBuffer = await context.decodeAudioData(brirBytes.slice(0));
     state.stemBuffers = stems;
     state.spatialSettings = { wet: 0.72, radius: 1.14, reflections: 0.62 };
