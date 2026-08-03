@@ -1,0 +1,15 @@
+{
+  "name": "spatial-audio-essential",
+  "version": "1.11.0",
+  "private": true,
+  "scripts": {
+    "check": "python -m py_compile app.py backend/audio_engine.py tools/build_universal_hrtf.py tools/build_measured_hrtf_library.py tools/build_brir_profiles.py tools/build_asset_manifest.py tools/diagnose.py && node --check static/app.js && node --check static/js/device-profiles.js && node --check static/js/runtime-quality.js && node --check static/js/spatial-quality.js && node --check static/js/spatial-analysis-worklet.js && node --check static/js/mushra.js",
+    "test": "npm run check && npm run test:audio && npm run test:e2e",
+    "test:audio": "python -m unittest discover -s tests -p test_*.py",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}

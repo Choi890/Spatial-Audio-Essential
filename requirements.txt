@@ -1,0 +1,6 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+numpy==1.26.4
+soundfile==0.13.1
+scipy==1.13.1
+h5py==3.14.0

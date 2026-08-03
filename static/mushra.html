@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Spatial Audio Listening Evaluation</title>
+  <link rel="stylesheet" href="styles.css?v=20260802-v13">
+</head>
+<body>
+  <main class="evaluation-shell">
+    <p class="eyebrow">BLINDED LISTENING TEST</p>
+    <h1>Spatial Audio 주관 평가</h1>
+    <p class="evaluation-note">동일 곡의 Original과 Full Spatial WAV를 넣으면 순서를 무작위화합니다. 헤드폰·볼륨·청취 위치를 고정하고 각 항목을 0–100으로 평가하세요. 이 도구는 MUSHRA 방식의 반복 비교를 돕지만, 단일 청취 결과가 공식 적합성 인증을 뜻하지는 않습니다.</p>
+    <div class="evaluation-actions">
+      <label>Original/Reference <input id="reference-file" type="file" accept="audio/wav,audio/*"></label>
+      <label>Full Spatial <input id="spatial-file" type="file" accept="audio/wav,audio/*"></label>
+      <button class="primary-button" id="prepare" type="button">블라인드 세션 만들기</button>
+      <button class="ghost-button" id="save" type="button" disabled>결과 JSON 저장</button>
+      <a class="ghost-button" href="/">스튜디오로 돌아가기</a>
+    </div>
+    <section class="evaluation-grid" id="candidates" aria-live="polite"></section>
+  </main>
+  <script src="/js/mushra.js?v=20260802-v13"></script>
+</body>
+</html>

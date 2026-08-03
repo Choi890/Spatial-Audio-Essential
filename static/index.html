@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Demucs stem과 mixture residual로 직접음을 재구성하는 binaural 공간음향 스튜디오" />
+  <title>Spatial Audio Essential</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="styles.css?v=20260803-v175-track-title-left" />
+</head>
+
+<body>
+  <a class="skip-link" href="#workspace">메인 작업 영역으로 건너뛰기</a>
+  <main class="app-shell" id="workspace">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Spatial Audio Essential">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>
+          <strong>Spatial Audio Essential</strong>
+        </span>
+      </a>
+      <div class="top-actions">
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="테마 전환" aria-pressed="false">
+          <span class="theme-toggle-mark" aria-hidden="true"></span>
+          <span id="theme-toggle-text">Dark</span>
+        </button>
+        <span class="status-pill" id="status-pill" role="status" aria-live="polite" aria-atomic="true">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-text">분석 대기 중</span>
+        </span>
+      </div>
+    </header>
+
+    <section class="studio-grid" id="top">
+      <section class="upload-panel" id="drop-zone" aria-label="음악 업로드">
+        <div class="upload-copy">
+          <p class="upload-file-label">음악 파일</p>
+          <h1 id="track-name">파일을 선택하세요</h1>
+        </div>
+        <div class="upload-control-stack">
+          <div class="upload-actions">
+            <label class="primary-button" for="audio-file">음악 선택</label>
+            <button class="ghost-button" id="reset-button" type="button">초기화</button>
+          </div>
+          <div class="analysis-progress" id="analysis-progress" hidden>
+            <div class="analysis-progress-copy">
+              <span id="analysis-phase">오디오 준비 중</span>
+              <span id="analysis-elapsed">0초</span>
+            </div>
+            <div
+              class="analysis-progress-track"
+              id="analysis-progress-track"
+              role="progressbar"
+              aria-label="오디오 분석 진행 단계"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+              aria-valuetext="분석 준비 중"
+            >
+              <span id="analysis-progress-bar"></span>
+            </div>
+            <ol class="analysis-progress-steps" aria-hidden="true">
+              <li data-analysis-step="upload">Upload</li>
+              <li data-analysis-step="separate">Separate</li>
+              <li data-analysis-step="decode">Decode</li>
+              <li data-analysis-step="render">Ready</li>
+            </ol>
+          </div>
+        </div>
+        <input id="audio-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac,.opus,.webm" />
+      </section>
+
+      <section class="transport-panel" aria-label="재생 컨트롤">
+        <div class="mode-toggle" role="group" aria-label="렌더링 모드">
+          <button class="mode-button is-active" type="button" data-mode="spatial">Full Spatial</button>
+          <button class="mode-button" type="button" data-mode="original">Original</button>
+        </div>
+
+        <div class="transport-row">
+          <button class="icon-button" id="play-button" type="button" disabled aria-label="재생">▶</button>
+          <button class="icon-button subtle" id="stop-button" type="button" disabled aria-label="정지">■</button>
+          <button class="ghost-button export-button" id="export-button" type="button" disabled>24-bit WAV</button>
+          <div class="seek-block">
+            <input id="seek-slider" type="range" min="0" max="1000" value="0" disabled aria-label="재생 위치" />
+            <div>
+              <span id="current-time">0:00</span>
+              <span id="total-time">0:00</span>
+            </div>
+          </div>
+        </div>
+        <div class="spatial-engine-module" aria-label="Spatial engine controls">
+          <div class="spatial-renderer-controls">
+            <div class="playback-device-control" id="playback-device-control">
+              <label for="playback-device-select">
+                <span>PLAYBACK DEVICE</span>
+                <select id="playback-device-select" aria-label="재생 기기"></select>
+              </label>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </section>
+
+    <section class="metric-grid" aria-label="음원 분석 지표">
+      <article class="metric-card">
+        <span>길이</span>
+        <strong id="duration-value">--:--</strong>
+        <small id="sample-rate-value">sample rate</small>
+      </article>
+      <article class="metric-card">
+        <span>BPM</span>
+        <strong id="tempo-value">--</strong>
+        <small id="tempo-note">tempo</small>
+      </article>
+      <article class="metric-card">
+        <span>조성</span>
+        <strong id="key-value">--</strong>
+        <small id="key-note">confidence</small>
+      </article>
+      <article class="metric-card">
+        <span>라우드니스</span>
+        <strong id="loudness-value">-- dB</strong>
+        <small id="loudness-note">LUFS-I · BS.1770</small>
+      </article>
+      <article class="metric-card">
+        <span>피크</span>
+        <strong id="peak-value">-- dB</strong>
+        <small id="crest-value">crest</small>
+      </article>
+      <article class="metric-card">
+        <span>중심 주파수</span>
+        <strong id="centroid-value">-- Hz</strong>
+        <small id="rolloff-value">rolloff</small>
+      </article>
+    </section>
+
+    <section class="analysis-grid">
+      <article class="panel stage-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>오디오 분석 필드</h2>
+          </div>
+          <span id="active-count">0 stems</span>
+        </div>
+        <div class="stage-map" id="stage-map" role="img" aria-label="Stem 또는 악기의 추정 공간 위치 지도"></div>
+      </article>
+
+      <article class="panel instrument-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Stem 반응 바</h2>
+          </div>
+          <span id="frame-time">0:00</span>
+        </div>
+        <div class="instrument-list" id="instrument-list"></div>
+      </article>
+    </section>
+
+    <section class="analysis-grid bottom spectrum-row">
+      <article class="panel spectrum-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>스펙트럼 밴드</h2>
+          </div>
+        </div>
+        <div class="spectrum-scene" id="spectrum-scene" aria-label="Low-load live frequency band view">
+          <canvas id="spectrum-canvas" width="1200" height="300" role="img" aria-label="재생 중인 오디오의 24대역 실시간 스펙트럼">실시간 주파수 대역 그래프</canvas>
+          <div class="spectrum-axis" aria-hidden="true">
+            <span>20</span>
+            <span>60</span>
+            <span>250</span>
+            <span>1k</span>
+            <span>4k</span>
+            <span>12k</span>
+            <span>20k</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="js/config.js?v=20260727-production"></script>
+  <script src="js/utils.js?v=20260727-production"></script>
+  <script src="js/device-profiles.js?v=20260802-bounded-df-v1"></script>
+  <script src="js/runtime-quality.js?v=20260802-render-capacity"></script>
+  <script src="js/spatial-quality.js?v=20260802-quality-v2"></script>
+  <script src="app.js?v=20260803-v111-surround-envelope"></script>
+</body>
+
+</html>

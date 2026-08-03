@@ -1,0 +1,46 @@
+{
+  "schema": "SpatialAudioEssential.HRTFLibrary/1.0",
+  "defaultId": "sadie-kemar",
+  "profiles": [
+    {
+      "id": "sadie-kemar",
+      "label": "SADIE II · KEMAR",
+      "profileAsset": "sadie-kemar.json",
+      "kind": "dummy-head measurement",
+      "directions": 1550,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "sadie-ku100",
+      "label": "SADIE II · KU100",
+      "profileAsset": "sadie-ku100.json",
+      "kind": "dummy-head measurement",
+      "directions": 1550,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "sadie-human-003",
+      "label": "SADIE II · Human 003",
+      "profileAsset": "sadie-human-003.json",
+      "kind": "human-ear measurement",
+      "directions": 170,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "sadie-human-009",
+      "label": "SADIE II · Human 009",
+      "profileAsset": "sadie-human-009.json",
+      "kind": "human-ear measurement",
+      "directions": 170,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "universal-listener-v1",
+      "label": "Universal Listener · Parametric fallback",
+      "profileAsset": "universal-listener-v1.json",
+      "kind": "deterministic generic fallback",
+      "directions": 144,
+      "license": "CC0-1.0"
+    }
+  ]
+}

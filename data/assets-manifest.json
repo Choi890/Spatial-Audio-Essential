@@ -1,0 +1,119 @@
+{
+  "schema": "SpatialAudioEssential.AssetManifest/1.0",
+  "assets": [
+    {
+      "path": "brir/AIR_DATABASE_NOTICE.txt",
+      "size": 1348,
+      "sha256": "c7dcf3b251ee4c92fde9b8ec31d76539a0e5b33c87982bccad638ff942327020",
+      "required": true
+    },
+    {
+      "path": "brir/profiles.json",
+      "size": 2345,
+      "sha256": "1847db54c16c7c7527019c78a4ea8a306c3a15425b646420f48bd2ec2a88dfac",
+      "required": true
+    },
+    {
+      "path": "brir/air_meeting_room_front_late.wav",
+      "size": 131112,
+      "sha256": "6bc75ece13a134957a77078e1260741bda50ad00ed22a3e6cc3cf606ac176aef",
+      "required": true
+    },
+    {
+      "path": "brir/air_lecture_room_front_late.wav",
+      "size": 262184,
+      "sha256": "d7ad2509ba04a286cdad564a3a9d3fee660ab11183e56a91131ffb26801f7b99",
+      "required": true
+    },
+    {
+      "path": "brir/air_stairway_front_late.wav",
+      "size": 384044,
+      "sha256": "b573953e0646ac89d447d8fb2ff06652225fea4a2e3d6751191cea7e4681e2e3",
+      "required": true
+    },
+    {
+      "path": "brir/air_aula_carolina_front_late.wav",
+      "size": 614444,
+      "sha256": "4feafec6df47a7fa76879a74f95d781d40e3c069b8db59382f06354e28783c53",
+      "required": true
+    },
+    {
+      "path": "hrtf/SADIE_II_NOTICE.txt",
+      "size": 1004,
+      "sha256": "a530d9b4cf8337b334689779e2ea45aad0191ac84b4ff4cb30dfa1accc9550f8",
+      "required": true
+    },
+    {
+      "path": "hrtf/profiles.json",
+      "size": 1290,
+      "sha256": "4964e956b73c47ccfd530635236bf64c475ae68b2a63b106d9cf54d4ef485db4",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-human-003.hrir",
+      "size": 350224,
+      "sha256": "8b787bd8d7fbcb2c6e305feaaea6cb25deda9e1c90867674869d5b510401d20d",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-human-003.json",
+      "size": 16536,
+      "sha256": "b8f1b3d00086c0a98284b9eba1688eed751472298b4fc16ddc387f13f971d0df",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-human-009.hrir",
+      "size": 350224,
+      "sha256": "a9e87cb257ee5eda8b765614e93f6b8e5f112316b5187cc40be08bae9b330ef6",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-human-009.json",
+      "size": 16536,
+      "sha256": "7a08d65ffcd541fb12ef6a9a0c0598b155d254a6eae5aecf33f170d0d66e6677",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-kemar.hrir",
+      "size": 3193024,
+      "sha256": "0584be37ff4c4668b1c7b1be0e425df5d2ce8820af89f721d9e41fa7d4c21ea0",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-kemar.json",
+      "size": 139778,
+      "sha256": "c840417c3120e8ae1ebb908693a1f872b438924cb0217f3b33de483c0e6fc9f1",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-ku100.hrir",
+      "size": 3193024,
+      "sha256": "d62be787136013c438f8f680941002be4c75fb41e6359417c2d20d9c46467ef9",
+      "required": true
+    },
+    {
+      "path": "hrtf/sadie-ku100.json",
+      "size": 139778,
+      "sha256": "9ee6840744293e4d8abdc8aac45ee42728f6acf3df88a6677336d9b0ff377143",
+      "required": true
+    },
+    {
+      "path": "hrtf/universal-listener-v1.hrir",
+      "size": 296664,
+      "sha256": "9625848510c357d81f44b9ec71dd6a8b558584bb873e3e54ddc8009a82aea73d",
+      "required": true
+    },
+    {
+      "path": "hrtf/universal-listener-v1.json",
+      "size": 14280,
+      "sha256": "b88b4e26db80445608818e139ea0ee1be1b926bbd45b01ffb1719af0c452c133",
+      "required": true
+    },
+    {
+      "path": "hrtf/universal-listener-v1.sofa",
+      "size": 118557,
+      "sha256": "1e8293d3b2972411ae65130a1ccf2e133fd5f4c8ce8442c80f71671e452beac9",
+      "required": true
+    }
+  ]
+}

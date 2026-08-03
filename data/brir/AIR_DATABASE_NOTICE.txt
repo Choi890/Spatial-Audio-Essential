@@ -1,0 +1,31 @@
+Aachen Impulse Response (AIR) Database v1.4
+Copyright (c) 2011 RWTH Aachen University
+Institute of Communication Systems and Data Processing
+
+Official project:
+https://www.iks.rwth-aachen.de/forschung/tools-downloads/databases/aachen-impulse-response-database/
+
+Verified source archive:
+https://www2.iks.rwth-aachen.de/air/air_database_release_1_4.zip
+SHA-256: 4baa3a0ea31dc72647ff61f53b0bf0b962876de31b6b0569ebc504987898aa02
+
+Measured binaural room responses included by this application:
+- AIR Meeting Room
+- AIR Lecture Room
+- AIR Stairway, frontal 90-degree orientation
+- AIR Aula Carolina, frontal 3 m configuration
+
+Each stereo WAV combines the corresponding left/right dummy-head MAT
+measurements. The response before 45 ms is removed because the application
+renders direct sound and directional early reflections separately. A short
+fade is applied at the retained response boundaries and channel energy is
+normalized for bounded browser convolution. No measured tail is repeated,
+stretched, or replaced with an algorithmic reverberator.
+
+AIR Database reference:
+M. Jeub, M. Schaefer, and P. Vary,
+"A Binaural Room Impulse Response Database for the Evaluation of
+Dereverberation Algorithms," Proc. DSP, 2009.
+
+The AIR distribution includes its license information. See the official
+project and original archive for the authoritative terms.

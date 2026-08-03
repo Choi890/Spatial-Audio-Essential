@@ -1,0 +1,764 @@
+{
+  "schema": "SpatialAudioEssential.HRTFProfile/1.0",
+  "id": "universal-listener-v1",
+  "label": "Universal Listener v1",
+  "profileType": "generic-parametric-symmetric",
+  "sofaConvention": "SimpleFreeFieldHRIR",
+  "aes69Edition": "AES69-2022 / SOFA 2.1",
+  "sampleRate": 48000,
+  "impulseLength": 256,
+  "anthropometry": {
+    "headRadiusMeters": 0.0875,
+    "earSpacingMeters": 0.175,
+    "speedOfSoundMetersPerSecond": 343.0
+  },
+  "cueModel": {
+    "itd": "Woodworth rigid-sphere folded rear model",
+    "maximumIldDb": 9.0,
+    "frontPinnaNotchHz": 8900,
+    "rearPinnaNotchHz": 6700,
+    "elevationNotchSlopeHzPerDegree": 38,
+    "diffuseFieldTarget": "bounded neutral; no headphone-specific compensation"
+  },
+  "rendering": {
+    "symmetryRequired": true,
+    "minimumPhaseMagnitudeWithExplicitItd": true,
+    "recommendedDistanceMeters": [
+      1.0,
+      3.0
+    ],
+    "fallback": "Web Audio native HRTF",
+    "runtimeAsset": "universal-listener-v1.hrir"
+  },
+  "directions": [
+    {
+      "azimuth": -180.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -165.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -150.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -135.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -120.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -105.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -90.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -75.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -60.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -45.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -30.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -15.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 0.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 15.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 30.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 45.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 60.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 75.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 90.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 105.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 120.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 135.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 150.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 165.0,
+      "elevation": -45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -180.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -165.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -150.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -135.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -120.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -105.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -90.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -75.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -60.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -45.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -30.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -15.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 0.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 15.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 30.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 45.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 60.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 75.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 90.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 105.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 120.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 135.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 150.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 165.0,
+      "elevation": -20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -180.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -165.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -150.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -135.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -120.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -105.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -90.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -75.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -60.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -45.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -30.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -15.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 0.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 15.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 30.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 45.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 60.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 75.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 90.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 105.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 120.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 135.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 150.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 165.0,
+      "elevation": 0.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -180.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -165.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -150.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -135.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -120.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -105.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -90.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -75.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -60.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -45.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -30.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -15.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 0.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 15.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 30.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 45.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 60.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 75.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 90.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 105.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 120.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 135.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 150.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 165.0,
+      "elevation": 20.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -180.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -165.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -150.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -135.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -120.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -105.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -90.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -75.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -60.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -45.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -30.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -15.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 0.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 15.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 30.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 45.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 60.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 75.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 90.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 105.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 120.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 135.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 150.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 165.0,
+      "elevation": 45.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -180.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -165.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -150.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -135.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -120.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -105.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -90.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -75.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -60.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -45.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -30.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": -15.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 0.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 15.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 30.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 45.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 60.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 75.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 90.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 105.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 120.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 135.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 150.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    },
+    {
+      "azimuth": 165.0,
+      "elevation": 70.0,
+      "distance": 1.0
+    }
+  ],
+  "references": [
+    "AES69-2022 Spatial acoustic data file format (SOFA 2.1)",
+    "Woodworth-Schlosberg rigid sphere ITD model",
+    "Duda and Martens (1998), Range dependence of a spherical head model"
+  ],
+  "limitations": [
+    "This is a deterministic generic profile, not an individualized ear measurement.",
+    "Headphone transfer functions and OS-level spatial processing are not compensated."
+  ]
+}

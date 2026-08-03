@@ -1,0 +1,27 @@
+SADIE II Database v2.2
+Copyright University of York
+License: Apache License 2.0
+
+Source record:
+https://zenodo.org/records/12542676
+
+Included runtime derivatives:
+- SADIE_KEMAR_DFC_256_order_fir_48000.sofa
+- SADIE_KU100_DFC_256_order_fir_48000.sofa
+- SADIE_003_DFC_256_order_fir_48000.sofa
+- SADIE_009_DFC_256_order_fir_48000.sofa
+
+The original SOFA files are converted to a compact lossless Float32 runtime
+container. Source positions are converted from SOFA left-positive azimuth to
+the application's right-positive renderer coordinates. A single bounded
+global level scale is applied per profile; directional and interaural cues are
+otherwise preserved.
+
+Citation:
+C. Armstrong, L. Thresh, D. Murphy, and G. Kearney,
+"A Perceptual Evaluation of Individual and Non-Individual HRTFs:
+A Case Study of the SADIE II Database," Applied Sciences 8(11), 2029, 2018.
+https://doi.org/10.3390/app8112029
+
+Checksums and the deterministic conversion procedure are recorded in
+tools/build_measured_hrtf_library.py.

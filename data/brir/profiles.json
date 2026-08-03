@@ -1,0 +1,59 @@
+{
+  "schema": "SpatialAudioEssential.BRIRLibrary/2.0",
+  "defaultId": "aula",
+  "source": {
+    "name": "Aachen Impulse Response Database v1.4",
+    "archiveSha256": "4baa3a0ea31dc72647ff61f53b0bf0b962876de31b6b0569ebc504987898aa02",
+    "url": "https://www2.iks.rwth-aachen.de/air/air_database_release_1_4.zip"
+  },
+  "profiles": [
+    {
+      "id": "meeting",
+      "label": "AIR Meeting Room",
+      "file": "air_meeting_room_front_late.wav",
+      "seconds": 0.6826,
+      "roomClass": "small",
+      "description": "AIR 회의실에서 측정한 짧고 명료한 binaural late field",
+      "measured": true,
+      "sourceLeft": "air_binaural_meeting_0_1_3.mat",
+      "sourceRight": "air_binaural_meeting_1_1_3.mat",
+      "sha256": "6bc75ece13a134957a77078e1260741bda50ad00ed22a3e6cc3cf606ac176aef"
+    },
+    {
+      "id": "lecture",
+      "label": "AIR Lecture Room",
+      "file": "air_lecture_room_front_late.wav",
+      "seconds": 1.3653,
+      "roomClass": "medium",
+      "description": "AIR 강의실에서 측정한 균형 잡힌 binaural late field",
+      "measured": true,
+      "sourceLeft": "air_binaural_lecture_0_1_4.mat",
+      "sourceRight": "air_binaural_lecture_1_1_4.mat",
+      "sha256": "d7ad2509ba04a286cdad564a3a9d3fee660ab11183e56a91131ffb26801f7b99"
+    },
+    {
+      "id": "stairway",
+      "label": "AIR Stairway",
+      "file": "air_stairway_front_late.wav",
+      "seconds": 2.0,
+      "roomClass": "tall",
+      "description": "AIR 계단실에서 측정한 수직감과 긴 감쇠의 binaural late field",
+      "measured": true,
+      "sourceLeft": "air_binaural_stairway_0_1_2_90.mat",
+      "sourceRight": "air_binaural_stairway_1_1_2_90.mat",
+      "sha256": "b573953e0646ac89d447d8fb2ff06652225fea4a2e3d6751191cea7e4681e2e3"
+    },
+    {
+      "id": "aula",
+      "label": "AIR Aula Carolina",
+      "file": "air_aula_carolina_front_late.wav",
+      "seconds": 3.2,
+      "roomClass": "concert",
+      "description": "AIR Aula Carolina 3 m 정면 측정의 대형 홀 binaural late field",
+      "measured": true,
+      "sourceLeft": "air_binaural_aula_carolina_0_1_3_90_3.mat",
+      "sourceRight": "air_binaural_aula_carolina_1_1_3_90_3.mat",
+      "sha256": "4feafec6df47a7fa76879a74f95d781d40e3c069b8db59382f06354e28783c53"
+    }
+  ]
+}
