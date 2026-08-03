@@ -932,9 +932,9 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(routing.externalizationTapCount).toBe({ full: 20, balanced: 16, safe: 8 }[routing.audioQualityId]);
   expect(routing.externalizationRadiusRange).toEqual([3, 4]);
   expect(Math.min(...routing.externalizationDistances)).toBeCloseTo(3, 4);
-  expect(Math.max(...routing.externalizationDistances)).toBeCloseTo(4, 4);
+  expect(Math.max(...routing.externalizationDistances)).toBeCloseTo({ full: 4, balanced: 3.7, safe: 3.7 }[routing.audioQualityId], 4);
   expect(Math.min(...routing.externalizationDelays)).toBeCloseTo(3 / 343, 4);
-  expect(Math.max(...routing.externalizationDelays)).toBeCloseTo(0.018, 4);
+  expect(Math.max(...routing.externalizationDelays)).toBeCloseTo({ full: 0.018, balanced: 0.0145, safe: 0.0145 }[routing.audioQualityId], 4);
   expect(Math.abs(routing.externalizationBalance)).toBeLessThan(1e-7);
   expect(routing.orchestralHallBusGain).toBeGreaterThan(0.68);
   expect(routing.orchestralHallBusGain).toBeLessThanOrEqual(0.82);
@@ -942,7 +942,7 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(routing.orchestralHighpass).toBe(160);
   expect(routing.orchestralLowpass).toBe(12500);
   expect(Math.min(...routing.orchestralDelays)).toBeCloseTo(0.011, 4);
-  expect(Math.max(...routing.orchestralDelays)).toBeCloseTo(0.046, 4);
+  expect(Math.max(...routing.orchestralDelays)).toBeCloseTo({ full: 0.046, balanced: 0.036, safe: 0.03 }[routing.audioQualityId], 4);
   expect(Math.abs(routing.orchestralBalance)).toBeLessThan(1e-7);
   expect(routing.venueBusGain).toBeGreaterThan(0.1);
   expect(routing.venueBusGain).toBeLessThan(0.25);

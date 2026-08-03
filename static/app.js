@@ -35,6 +35,7 @@ const STEM_METER_DB_OFFSET = -10;
 const DEMUCS_MODEL = "htdemucs_ft";
 const MAX_AUDIO_FILE_BYTES = 420 * 1024 * 1024;
 const MAX_CANVAS_DPR = 2;
+const AUDIO_CONTEXT_RESUME_WAIT_MS = 250;
 const STEM_DURATION_TOLERANCE_SECONDS = 0.12;
 const SUPPORTED_AUDIO_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "ogg", "opus", "wav", "webm"]);
 const ANALYSIS_PHASES = {
@@ -2053,7 +2054,17 @@ async function ensureAudioContext() {
     await ensureSpatialAnalysisWorklet(state.audioContext);
   }
   if (state.audioContext.state === "suspended") {
-    await state.audioContext.resume();
+    const resumePromise = state.audioContext.resume();
+    let resumeTimer = null;
+    // 자동재생 정책이 resume을 보류해도 파일 분석과 디코딩은 계속 진행한다.
+    await Promise.race([
+      resumePromise,
+      new Promise((resolve) => {
+        resumeTimer = window.setTimeout(resolve, AUDIO_CONTEXT_RESUME_WAIT_MS);
+      })
+    ]).finally(() => {
+      if (resumeTimer !== null) window.clearTimeout(resumeTimer);
+    });
   }
   return state.audioContext;
 }
