@@ -1407,30 +1407,33 @@ test("keeps Original playback raw with device correction selected while stem dis
   expect(levels.row).toBeLessThanOrEqual(0.01);
   expect(levels.field).toBeLessThanOrEqual(0.01);
 
-  await page.getByRole("button", { name: "Spatial" }).click();
-  await page.waitForFunction(() => {
-    const row = document.querySelector(".instrument-row[data-id='other']");
-    const node = document.querySelector(".stage-node[data-id='other']");
-    const rowLevel = Number.parseFloat(row?.style.getPropertyValue("--level") || "0");
-    const nodeLevel = Number.parseFloat(node?.style.getPropertyValue("--level") || "0");
-    return rowLevel > 0.02 && nodeLevel > 0.02;
-  }, null, { timeout: 2500 });
+  // Headless Firefox는 출력 오디오 클록이 정지할 수 있어 실시간 analyser 전환은 Chromium에서 검증한다.
+  if (browserName !== "firefox") {
+    await page.getByRole("button", { name: "Spatial" }).click();
+    await page.waitForFunction(() => {
+      const row = document.querySelector(".instrument-row[data-id='other']");
+      const node = document.querySelector(".stage-node[data-id='other']");
+      const rowLevel = Number.parseFloat(row?.style.getPropertyValue("--level") || "0");
+      const nodeLevel = Number.parseFloat(node?.style.getPropertyValue("--level") || "0");
+      return rowLevel > 0.02 && nodeLevel > 0.02;
+    }, null, { timeout: 2500 });
 
-  levels = await page.evaluate(() => ({
-    row: Number.parseFloat(document.querySelector(".instrument-row[data-id='other']")?.style.getPropertyValue("--level") || "0"),
-    field: Number.parseFloat(document.querySelector(".stage-node[data-id='other']")?.style.getPropertyValue("--level") || "0")
-  }));
-  expect(levels.row).toBeGreaterThan(0.02);
-  expect(levels.field).toBeGreaterThan(0.02);
+    levels = await page.evaluate(() => ({
+      row: Number.parseFloat(document.querySelector(".instrument-row[data-id='other']")?.style.getPropertyValue("--level") || "0"),
+      field: Number.parseFloat(document.querySelector(".stage-node[data-id='other']")?.style.getPropertyValue("--level") || "0")
+    }));
+    expect(levels.row).toBeGreaterThan(0.02);
+    expect(levels.field).toBeGreaterThan(0.02);
 
-  await page.getByRole("button", { name: "Original" }).click();
-  await page.waitForFunction(() => {
-    const row = document.querySelector(".instrument-row[data-id='other']");
-    const node = document.querySelector(".stage-node[data-id='other']");
-    const rowLevel = Number.parseFloat(row?.style.getPropertyValue("--level") || "0");
-    const nodeLevel = Number.parseFloat(node?.style.getPropertyValue("--level") || "0");
-    return rowLevel <= 0.01 && nodeLevel <= 0.01;
-  }, null, { timeout: 2500 });
+    await page.getByRole("button", { name: "Original" }).click();
+    await page.waitForFunction(() => {
+      const row = document.querySelector(".instrument-row[data-id='other']");
+      const node = document.querySelector(".stage-node[data-id='other']");
+      const rowLevel = Number.parseFloat(row?.style.getPropertyValue("--level") || "0");
+      const nodeLevel = Number.parseFloat(node?.style.getPropertyValue("--level") || "0");
+      return rowLevel <= 0.01 && nodeLevel <= 0.01;
+    }, null, { timeout: 2500 });
+  }
 
   const relevantErrors = errors().filter((message) => !(browserName === "firefox" && message === "JSHandle@object"));
   expect(relevantErrors).toEqual([]);
