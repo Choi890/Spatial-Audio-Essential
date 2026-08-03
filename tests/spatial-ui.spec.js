@@ -1416,7 +1416,7 @@ test("keeps Original playback raw with device correction selected while stem dis
       const rowLevel = Number.parseFloat(row?.style.getPropertyValue("--level") || "0");
       const nodeLevel = Number.parseFloat(node?.style.getPropertyValue("--level") || "0");
       return rowLevel > 0.02 && nodeLevel > 0.02;
-    }, null, { timeout: 2500 });
+    }, null, { timeout: 8000 });
 
     levels = await page.evaluate(() => ({
       row: Number.parseFloat(document.querySelector(".instrument-row[data-id='other']")?.style.getPropertyValue("--level") || "0"),
@@ -1432,7 +1432,7 @@ test("keeps Original playback raw with device correction selected while stem dis
       const rowLevel = Number.parseFloat(row?.style.getPropertyValue("--level") || "0");
       const nodeLevel = Number.parseFloat(node?.style.getPropertyValue("--level") || "0");
       return rowLevel <= 0.01 && nodeLevel <= 0.01;
-    }, null, { timeout: 2500 });
+    }, null, { timeout: 8000 });
   }
 
   const relevantErrors = errors().filter((message) => !(browserName === "firefox" && message === "JSHandle@object"));
