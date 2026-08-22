@@ -27,6 +27,19 @@ class FakeStreamingRequest:
 
 
 class AppBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    def test_stale_analysis_profile_cache_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cache_root = Path(temp)
+            file_hash = "a" * 64
+            cache_path = cache_root / f"{file_hash}.json"
+            cache_path.write_text(
+                json.dumps({"analysisProfile": "obsolete-profile"}),
+                encoding="utf-8",
+            )
+            with patch.object(spatial_app, "ANALYSIS_CACHE_DIR", cache_root):
+                self.assertIsNone(spatial_app.read_cached_analysis(file_hash, "song.flac"))
+            self.assertFalse(cache_path.exists())
+
     def test_spatial_asset_manifest_and_sofa_are_valid(self) -> None:
         status = spatial_app.validate_spatial_assets()
         self.assertEqual(status["status"], "ready")
@@ -87,7 +100,7 @@ class AppBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             destination = Path(temp) / "upload.bin"
-            size, digest = await spatial_app.stream_request_to_file(
+            size, digest, content_digest = await spatial_app.stream_request_to_file(
                 FakeStreamingRequest(chunks),
                 destination,
                 profile_prefix=profile,
@@ -95,6 +108,7 @@ class AppBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(size, len(b"alpha-omega"))
             self.assertEqual(digest, expected)
+            self.assertEqual(content_digest, hashlib.sha256(b"alpha-omega").hexdigest())
             self.assertEqual(destination.read_bytes(), b"alpha-omega")
 
     async def test_upload_stream_stops_at_the_server_limit(self) -> None:

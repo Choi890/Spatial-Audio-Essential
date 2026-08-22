@@ -18,7 +18,8 @@
     piano: "Pf"
   };
 
-  const STEM_ORDER = ["vocals", "other", "drums", "bass"];
+  const CORE_STEM_ORDER = ["vocals", "other", "drums", "bass"];
+  const STEM_ORDER = ["vocals", "guitar", "piano", "other", "drums", "bass"];
   const METER_FRAME_INTERVAL = 1 / 30;
 
   const STEM_PROFILES = {
@@ -29,6 +30,22 @@
       short: "Lead",
       color: "#c86f5a",
       position: { x: 0, y: 0.24, z: -2.35 }
+    },
+    guitar: {
+      id: "guitar",
+      label: "Guitar Stem",
+      description: "Quality-gated adaptive guitar stem",
+      short: "Guitar",
+      color: "#b87954",
+      position: { x: 1.18, y: 0.2, z: -3.35 }
+    },
+    piano: {
+      id: "piano",
+      label: "Piano Stem",
+      description: "Quality-gated adaptive piano stem",
+      short: "Piano",
+      color: "#8b79a8",
+      position: { x: -1.12, y: 0.2, z: -3.45 }
     },
     other: {
       id: "other",
@@ -127,6 +144,7 @@
     LIVE_SIGNATURES,
     METER_FRAME_INTERVAL,
     SHORT_NAMES,
+    CORE_STEM_ORDER,
     STEM_ORDER,
     STEM_PROFILES
   };

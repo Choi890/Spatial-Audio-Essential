@@ -11,6 +11,7 @@ import time
 import threading
 import uuid
 from contextlib import asynccontextmanager, suppress
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -23,8 +24,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from backend.audio_engine import (
     AnalysisCancelledError,
     AudioChannelLayoutError,
+    DEMUCS_AUXILIARY_MODEL,
     MAX_BODY_BYTES,
-    analyze_audio,
+    analyze_audio_optimized,
     measure_master_output,
 )
 
@@ -48,8 +50,8 @@ SUPPORTED_DEMUCS_MODELS = frozenset({"htdemucs_ft", "htdemucs"})
 DEMUCS_MODEL = os.environ.get("SPATIAL_SEPARATOR_MODEL", "htdemucs_ft")
 if DEMUCS_MODEL not in SUPPORTED_DEMUCS_MODELS:
     DEMUCS_MODEL = "htdemucs_ft"
-ANALYSIS_PROFILE_VERSION = "fullband-neutral-v3-bs1770"
-APP_VERSION = "1.11.0"
+ANALYSIS_PROFILE_VERSION = "fullband-neutral-v5-cache-safe"
+APP_VERSION = "1.17.0"
 UPLOAD_CHUNK_WRITE_LIMIT = MAX_BODY_BYTES
 ALLOWED_AUDIO_EXTENSIONS = {
     ".aac",
@@ -198,6 +200,7 @@ async def health() -> dict[str, Any]:
         "service": "Spatial Audio Essential",
         "version": APP_VERSION,
         "demucsModel": DEMUCS_MODEL,
+        "demucsAuxiliaryModel": DEMUCS_AUXILIARY_MODEL,
         "separatorProvider": {
             "id": "facebookresearch-demucs",
             "maintenance": "archived-upstream",
@@ -214,6 +217,7 @@ async def health() -> dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=1)
 def validate_spatial_assets() -> dict[str, Any]:
     """Verify immutable spatial assets without allowing manifest path traversal."""
     try:
@@ -236,12 +240,21 @@ def validate_spatial_assets() -> dict[str, Any]:
         size_ok = exists and candidate.stat().st_size == expected_size
         digest = ""
         if size_ok:
-            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            digest = sha256_file(candidate)
         valid = bool(size_ok and digest == expected_hash)
         if required and not valid:
             required_ok = False
         results.append({"path": relative, "required": required, "valid": valid})
     return {"status": "ready" if required_ok else "degraded", "assets": results}
+
+
+def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    """대형 공간 에셋을 메모리에 통째로 올리지 않고 해시한다."""
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @app.post("/api/analyze")
@@ -267,7 +280,7 @@ async def analyze(
     ).encode("utf-8")
 
     try:
-        byte_count, file_hash = await stream_request_to_file(
+        byte_count, file_hash, content_hash = await stream_request_to_file(
             request,
             temporary_path,
             profile_prefix=profile_prefix,
@@ -319,13 +332,14 @@ async def analyze(
                 try:
                     analysis_task = asyncio.create_task(
                         asyncio.to_thread(
-                            analyze_audio,
+                            analyze_audio_optimized,
                             audio_path,
                             job_id=job_id,
                             output_dir=OUTPUT_DIR,
                             request_demucs=demucs,
                             demucs_model=demucs_model,
                             cache_key=file_hash,
+                            demucs_cache_key=content_hash,
                             cancel_event=cancel_event,
                         )
                     )
@@ -392,7 +406,7 @@ async def measure_output(request: Request, filename: str = "full-spatial.wav") -
     reject_oversized_content_length(request)
     temporary_path = UPLOAD_DIR / f".{uuid.uuid4().hex}.measure.wav"
     try:
-        byte_count, _ = await stream_request_to_file(
+        byte_count, _, _ = await stream_request_to_file(
             request,
             temporary_path,
             profile_prefix=b"final-output-meter-v1",
@@ -423,10 +437,11 @@ async def stream_request_to_file(
     destination: Path,
     *,
     profile_prefix: bytes,
-) -> tuple[int, str]:
-    digest = hashlib.sha256()
-    digest.update(profile_prefix)
-    digest.update(b"\0")
+) -> tuple[int, str, str]:
+    analysis_digest = hashlib.sha256()
+    analysis_digest.update(profile_prefix)
+    analysis_digest.update(b"\0")
+    content_digest = hashlib.sha256()
     byte_count = 0
 
     with destination.open("wb", buffering=1024 * 1024) as output:
@@ -439,10 +454,11 @@ async def stream_request_to_file(
                     status_code=413,
                     detail=f"오디오 파일은 최대 {MAX_BODY_BYTES // (1024 * 1024)}MB까지 업로드할 수 있습니다.",
                 )
-            digest.update(chunk)
+            analysis_digest.update(chunk)
+            content_digest.update(chunk)
             output.write(chunk)
 
-    return byte_count, digest.hexdigest()
+    return byte_count, analysis_digest.hexdigest(), content_digest.hexdigest()
 
 
 def reject_oversized_content_length(request: Request) -> None:
@@ -493,7 +509,11 @@ def read_cached_analysis(file_hash: str, filename: str) -> dict[str, Any] | None
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or not cached_stem_paths_exist(payload):
+    if (
+        not isinstance(payload, dict)
+        or payload.get("analysisProfile") != ANALYSIS_PROFILE_VERSION
+        or not cached_stem_paths_exist(payload)
+    ):
         path.unlink(missing_ok=True)
         return None
 
@@ -518,6 +538,12 @@ def cached_stem_paths_exist(payload: dict[str, Any]) -> bool:
         return False
     stems = separator.get("stems")
     if not isinstance(stems, list) or len(stems) < 4:
+        return False
+    stem_ids = {
+        Path(str(relative_path)).stem.lower()
+        for relative_path in stems
+    }
+    if not {"vocals", "other", "drums", "bass"}.issubset(stem_ids):
         return False
     try:
         output_root = OUTPUT_DIR.resolve()

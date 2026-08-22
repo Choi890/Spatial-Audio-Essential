@@ -6,13 +6,19 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import soundfile as sf
 
 from backend.audio_engine import (
     AudioChannelLayoutError,
+    DEMUCS_SHIFTS,
     analyze_audio,
+    analyze_audio_optimized,
+    build_adaptive_hybrid_stems,
+    build_demucs_cache_id,
+    cached_demucs_stems_match_source,
     enhance_demucs_stems,
     estimate_true_peak_8x,
     integrated_loudness_bs1770,
@@ -20,11 +26,71 @@ from backend.audio_engine import (
     measure_master_output,
     read_stem_quality,
     run_cancellable_command,
+    run_demucs_model,
     AnalysisCancelledError,
 )
 
 
 class AudioEngineRegressionTests(unittest.TestCase):
+    def test_cuda_analysis_overlaps_features_and_demucs_without_changing_results(self) -> None:
+        feature_result = {
+            "models": {"deepSeparator": {"status": "ready"}},
+            "activeIds": [],
+            "mix": {},
+            "recommendations": [],
+        }
+        separator = {"status": "completed", "stems": ["vocals.wav"]}
+        with (
+            patch("backend.audio_engine.detect_demucs_device", return_value="cuda"),
+            patch("backend.audio_engine.analyze_audio", return_value=feature_result),
+            patch("backend.audio_engine.inspect_demucs", return_value=separator),
+            patch("backend.audio_engine.build_clean_recommendations", return_value=[]),
+        ):
+            result = analyze_audio_optimized(
+                Path("song.flac"),
+                job_id="parallel",
+                output_dir=Path("outputs"),
+                request_demucs=True,
+                cache_key="analysis",
+                demucs_cache_key="content",
+            )
+        self.assertIs(result["models"]["deepSeparator"], separator)
+        self.assertEqual(result["analysisExecution"], "parallel-cpu-features-cuda-demucs")
+
+    def test_demucs_uses_single_shift_and_pcm24_intermediates(self) -> None:
+        with patch("backend.audio_engine.run_cancellable_command") as runner:
+            run_demucs_model(
+                Path("song.flac"),
+                Path("outputs"),
+                "htdemucs_ft",
+                "cuda",
+                cancel_event=None,
+            )
+        command = runner.call_args.args[0]
+        self.assertEqual(command[command.index("--shifts") + 1], str(DEMUCS_SHIFTS))
+        self.assertIn("--int24", command)
+        self.assertNotIn("--float32", command)
+
+    def test_demucs_cache_id_keeps_each_song_isolated(self) -> None:
+        first = build_demucs_cache_id("a" * 64, "htdemucs_ft")
+        second = build_demucs_cache_id("b" * 64, "htdemucs_ft")
+        self.assertNotEqual(first, second)
+        self.assertIn("a" * 32, first)
+        self.assertIn("b" * 32, second)
+
+    def test_cached_demucs_stems_must_match_source_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.wav"
+            stem = root / "vocals.wav"
+            sf.write(source, np.zeros((48_000, 2), dtype=np.float32), 48_000)
+            sf.write(stem, np.zeros((24_000, 2), dtype=np.float32), 48_000)
+            self.assertFalse(cached_demucs_stems_match_source([stem], source))
+
+            # Demucs는 원본과 다른 모델 샘플레이트로 출력할 수 있지만 시간축은 같아야 한다.
+            sf.write(stem, np.zeros((44_100, 2), dtype=np.float32), 44_100)
+            self.assertTrue(cached_demucs_stems_match_source([stem], source))
+
     def test_multichannel_input_is_rejected_explicitly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "surround.wav"
@@ -117,8 +183,9 @@ class AudioEngineRegressionTests(unittest.TestCase):
         separator = result["models"]["deepSeparator"]
         image = result["stereoImage"]
         self.assertEqual(separator["model"], "htdemucs_ft")
-        self.assertEqual(separator["qualityProfile"], "spatial-q2")
-        self.assertEqual(separator["postprocess"], "softmask-v1")
+        self.assertEqual(separator["qualityProfile"], "spatial-q3-adaptive6")
+        self.assertEqual(separator["postprocess"], "softmask-v2-hybrid")
+        self.assertEqual(separator["auxiliaryModel"], "htdemucs_6s")
         self.assertIn("shifts", separator["settings"])
         self.assertGreater(image["pan"], 0.2)
         self.assertGreater(image["width"], 0.05)
@@ -155,6 +222,96 @@ class AudioEngineRegressionTests(unittest.TestCase):
                 self.assertGreater(metrics["spatialWeight"], 0.6, stem_id)
                 data, _ = sf.read(root / f"{stem_id}.wav", always_2d=True, dtype="float32")
                 self.assertTrue(np.all(np.isfinite(data)))
+                self.assertEqual(sf.info(root / f"{stem_id}.wav").subtype, "PCM_24")
+
+    def test_adaptive_hybrid_promotes_clean_candidates_and_preserves_the_sum(self) -> None:
+        sample_rate = 24000
+        timeline = np.arange(sample_rate, dtype=np.float64) / sample_rate
+        components = {
+            "vocals": np.sin(2 * np.pi * 330 * timeline) * 0.12,
+            "drums": np.sin(2 * np.pi * 120 * timeline) * 0.08,
+            "bass": np.sin(2 * np.pi * 70 * timeline) * 0.1,
+            "guitar": np.sin(2 * np.pi * 710 * timeline) * 0.09,
+            "piano": np.sin(2 * np.pi * 1040 * timeline) * 0.065,
+            "bed": np.sin(2 * np.pi * 1510 * timeline) * 0.07,
+        }
+        core = {
+            "vocals": components["vocals"],
+            "drums": components["drums"],
+            "bass": components["bass"],
+            "other": components["guitar"] + components["piano"] + components["bed"],
+        }
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            primary_root = root / "primary"
+            auxiliary_root = root / "auxiliary"
+            final_root = root / "final"
+            primary_root.mkdir()
+            auxiliary_root.mkdir()
+            primary_paths = []
+            for stem_id, mono in core.items():
+                path = primary_root / f"{stem_id}.wav"
+                sf.write(path, np.column_stack([mono, mono]), sample_rate, subtype="FLOAT")
+                primary_paths.append(path)
+            auxiliary_paths = []
+            for stem_id in ("guitar", "piano"):
+                mono = components[stem_id]
+                path = auxiliary_root / f"{stem_id}.wav"
+                sf.write(path, np.column_stack([mono, mono]), sample_rate, subtype="FLOAT")
+                auxiliary_paths.append(path)
+
+            final_paths, profile = build_adaptive_hybrid_stems(
+                primary_paths,
+                auxiliary_paths,
+                final_root,
+            )
+            final_sum = None
+            for path in final_paths:
+                self.assertEqual(sf.info(path).subtype, "PCM_24")
+                data, _ = sf.read(path, always_2d=True, dtype="float32")
+                final_sum = data if final_sum is None else final_sum + data
+            primary_sum = sum(
+                np.column_stack([mono, mono]).astype(np.float32)
+                for mono in core.values()
+            )
+
+        self.assertEqual(profile["accepted"], ["guitar", "piano"])
+        self.assertEqual({path.stem for path in final_paths}, {"vocals", "guitar", "piano", "other", "drums", "bass"})
+        self.assertLess(float(np.max(np.abs(final_sum - primary_sum))), 2e-6)
+
+    def test_adaptive_hybrid_rejects_a_candidate_that_leaks_from_the_vocal(self) -> None:
+        sample_rate = 16000
+        timeline = np.arange(sample_rate, dtype=np.float64) / sample_rate
+        vocals = np.sin(2 * np.pi * 310 * timeline) * 0.12
+        core = {
+            "vocals": vocals,
+            "other": np.sin(2 * np.pi * 820 * timeline) * 0.11,
+            "drums": np.sin(2 * np.pi * 125 * timeline) * 0.07,
+            "bass": np.sin(2 * np.pi * 65 * timeline) * 0.09,
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            primary_root = root / "primary"
+            auxiliary_root = root / "auxiliary"
+            primary_root.mkdir()
+            auxiliary_root.mkdir()
+            primary_paths = []
+            for stem_id, mono in core.items():
+                path = primary_root / f"{stem_id}.wav"
+                sf.write(path, np.column_stack([mono, mono]), sample_rate, subtype="FLOAT")
+                primary_paths.append(path)
+            leaked = auxiliary_root / "guitar.wav"
+            sf.write(leaked, np.column_stack([vocals, vocals]), sample_rate, subtype="FLOAT")
+            final_paths, profile = build_adaptive_hybrid_stems(
+                primary_paths,
+                [leaked],
+                root / "final",
+            )
+
+        self.assertNotIn("guitar", profile["accepted"])
+        self.assertIn("guitar", profile["rejected"])
+        self.assertEqual({path.stem for path in final_paths}, {"vocals", "other", "drums", "bass"})
 
 
 if __name__ == "__main__":

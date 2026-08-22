@@ -672,9 +672,37 @@ test("toggles playback with the Space key", async ({ page }, testInfo) => {
 
   await expect(page.getByRole("button", { name: "Spatial" })).toHaveClass(/is-active/);
 
+  await page.locator("#export-button").focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator("#play-button")).toHaveText("▶");
+
+  await page.locator("#playback-device-select").focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator("#play-button")).toHaveText("Ⅱ");
+
   await page.keyboard.press("Escape");
   await expect(page.locator("#play-button")).toHaveText("▶");
   await expect(page.locator("#current-time")).toHaveText("0:00");
+
+  await page.evaluate(() => {
+    state.spatialRenderPromise = new Promise(() => {});
+  });
+  await page.keyboard.press("Space");
+  await expect(page.locator("#play-button")).toHaveText("Ⅱ", { timeout: 500 });
+  await page.keyboard.press("Space");
+  await expect(page.locator("#play-button")).toHaveText("▶");
+
+  await page.keyboard.press("Space");
+  await page.keyboard.press("Space");
+  await page.waitForTimeout(120);
+  const rapidToggleState = await page.evaluate(() => ({
+    playing: state.playing,
+    desired: state.playbackDesired
+  }));
+  expect(rapidToggleState).toEqual({ playing: false, desired: false });
+  await page.evaluate(() => {
+    state.spatialRenderPromise = null;
+  });
   expect(errors()).toEqual([]);
 });
 
@@ -816,8 +844,11 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
     externalizationRadiusRange: state.graph?.spatialLayer?.externalization?.radiusRange,
     externalizationDistances: (state.graph?.spatialLayer?.externalization?.taps || [])
       .map((tap) => tap.direction.distance),
+    externalizationAzimuths: (state.graph?.spatialLayer?.externalization?.taps || [])
+      .map((tap) => tap.direction.azimuth),
     externalizationDelays: (state.graph?.spatialLayer?.externalization?.taps || [])
       .map((tap) => tap.delay.delayTime.value),
+    externalizationStageFront: state.graph?.spatialLayer?.externalization?.stageFront,
     externalizationBalance: (state.graph?.spatialLayer?.externalization?.taps || [])
       .reduce((sum, tap) => (
         sum + tap.gain.gain.value * Math.sin(tap.direction.azimuth * Math.PI / 180)
@@ -829,7 +860,29 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
     orchestralLowpass: state.graph?.spatialLayer?.orchestralHall?.airGuard?.frequency.value,
     orchestralDelays: (state.graph?.spatialLayer?.orchestralHall?.taps || [])
       .map((tap) => tap.delay.delayTime.value),
+    hallDimensions: { ...SPATIAL_CUBIC_HALL },
+    hallField: SPATIAL_FIELD_DIRECTIONS.map((direction) => ({
+      id: direction.id,
+      azimuth: direction.azimuth,
+      elevation: direction.elevation,
+      distance: direction.distance,
+      delay: direction.delay,
+      rendered: getInterpolatedHrtfPosition(direction, { physicalRoom: true })
+    })),
     orchestralBalance: (state.graph?.spatialLayer?.orchestralHall?.taps || [])
+      .reduce((sum, tap) => (
+        sum + tap.gain.gain.value * Math.sin(tap.direction.azimuth * Math.PI / 180)
+      ), 0),
+    lateEnvelopmentBusGain: state.graph?.spatialLayer?.lateEnvelopmentBus?.gain.value,
+    lateEnvelopmentSend: state.graph?.spatialLayer?.lateEnvelopment?.send?.gain.value,
+    lateEnvelopmentTapCount: state.graph?.spatialLayer?.lateEnvelopment?.taps?.length,
+    lateEnvelopmentDelays: (state.graph?.spatialLayer?.lateEnvelopment?.taps || [])
+      .map((tap) => tap.delay.delayTime.value),
+    lateEnvelopmentHighpass: state.graph?.spatialLayer?.lateEnvelopment?.bodyGuard?.frequency.value,
+    lateEnvelopmentLowpass: state.graph?.spatialLayer?.lateEnvelopment?.airGuard?.frequency.value,
+    lateEnvelopmentDiffusionSeconds: state.graph?.spatialLayer?.lateEnvelopment?.diffuser?.buffer?.duration,
+    lateEnvelopmentStartsAfterEarlyWindow: state.graph?.spatialLayer?.lateEnvelopment?.startsAfterEarlyWindow,
+    lateEnvelopmentBalance: (state.graph?.spatialLayer?.lateEnvelopment?.taps || [])
       .reduce((sum, tap) => (
         sum + tap.gain.gain.value * Math.sin(tap.direction.azimuth * Math.PI / 180)
       ), 0),
@@ -902,62 +955,105 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
     safe: { vocals: 2, other: 4, drums: 4, bass: 2 }
   }[routing.audioQualityId]);
   expect(routing.diffuseHighpasses).toEqual({
-    vocals: 900,
+    vocals: 1100,
     other: 650,
     drums: 1200,
     bass: 320
   });
   expect(routing.depthRoles).toEqual({
-    vocals: "front",
-    other: "front",
-    drums: "rear",
-    bass: "rear"
+    vocals: "stage-front",
+    guitar: "stage-mid",
+    piano: "stage-mid",
+    other: "stage-mid",
+    drums: "stage-back",
+    bass: "stage-back"
   });
-  expect(Math.abs(routing.anchors.vocals.azimuth)).toBeLessThan(45);
-  expect(Math.abs(routing.anchors.other.azimuth)).toBeLessThan(75);
-  expect(Math.abs(routing.anchors.drums.azimuth)).toBeGreaterThan(130);
-  expect(Math.abs(routing.anchors.bass.azimuth)).toBeGreaterThan(170);
-  expect(routing.anchors.vocals.distance).toBeLessThan(4);
-  expect(routing.anchors.other.distance).toBeLessThan(4);
-  expect(routing.anchors.drums.distance).toBeGreaterThan(9);
-  expect(routing.anchors.bass.distance).toBeGreaterThan(9);
-  expect(Math.max(routing.anchors.vocals.delay, routing.anchors.other.delay)).toBeLessThanOrEqual(0.007);
-  expect(Math.min(routing.anchors.drums.delay, routing.anchors.bass.delay)).toBeGreaterThanOrEqual(0.017);
+  expect(Object.values(routing.anchors).every((anchor) => Math.abs(anchor.azimuth) <= 32)).toBe(true);
+  expect(routing.anchors.vocals.distance).toBeGreaterThanOrEqual(7);
+  expect(routing.anchors.vocals.distance).toBeLessThan(routing.anchors.other.distance);
+  expect(routing.anchors.other.distance).toBeLessThan(routing.anchors.drums.distance);
+  expect(routing.anchors.other.distance).toBeLessThan(routing.anchors.bass.distance);
+  expect(routing.anchors.vocals.delay).toBeLessThan(routing.anchors.other.delay);
+  expect(routing.anchors.other.delay).toBeLessThan(routing.anchors.drums.delay);
   expect(routing.directBusGain).toBeCloseTo(0.86, 4);
   const normalizedRoomMasterGain = routing.roomMasterGain / { full: 1, balanced: 0.94, safe: 0.86 }[routing.audioQualityId];
   expect(normalizedRoomMasterGain).toBeGreaterThan(0.58);
   expect(normalizedRoomMasterGain).toBeLessThanOrEqual(0.69);
   expect(routing.sceneSumGain).toBeCloseTo(0.86, 4);
   expect(routing.lateralBusGain).toBeGreaterThan(1);
-  expect(routing.lateralBusGain).toBeLessThan(1.6);
+  expect(routing.lateralBusGain).toBeLessThan(1.7);
   expect(routing.externalizationBusGain).toBeGreaterThan(0.8);
   expect(routing.externalizationBusGain).toBeLessThan(0.9);
-  expect(routing.externalizationTapCount).toBe({ full: 20, balanced: 16, safe: 8 }[routing.audioQualityId]);
-  expect(routing.externalizationRadiusRange).toEqual([3, 4]);
-  expect(Math.min(...routing.externalizationDistances)).toBeCloseTo(3, 4);
-  expect(Math.max(...routing.externalizationDistances)).toBeCloseTo({ full: 4, balanced: 3.7, safe: 3.7 }[routing.audioQualityId], 4);
-  expect(Math.min(...routing.externalizationDelays)).toBeCloseTo(3 / 343, 4);
-  expect(Math.max(...routing.externalizationDelays)).toBeCloseTo({ full: 0.018, balanced: 0.0145, safe: 0.0145 }[routing.audioQualityId], 4);
+  expect(routing.externalizationTapCount).toBe({ full: 24, balanced: 16, safe: 8 }[routing.audioQualityId]);
+  expect(routing.externalizationRadiusRange).toEqual([7.2, 11.8]);
+  expect(routing.externalizationStageFront).toBe(true);
+  expect(Math.min(...routing.externalizationDistances)).toBeCloseTo(7.2, 4);
+  expect(Math.max(...routing.externalizationDistances)).toBeCloseTo({ full: 11.8, balanced: 11.1, safe: 10.2 }[routing.audioQualityId], 4);
+  expect(Math.max(...routing.externalizationAzimuths.map(Math.abs))).toBeLessThanOrEqual(79);
+  expect(Math.min(...routing.externalizationDelays)).toBeCloseTo(7.2 / 343, 4);
+  expect(Math.max(...routing.externalizationDelays)).toBeCloseTo({ full: 0.035, balanced: 0.0324, safe: 0.0297 }[routing.audioQualityId], 3);
   expect(Math.abs(routing.externalizationBalance)).toBeLessThan(1e-7);
-  expect(routing.orchestralHallBusGain).toBeGreaterThan(0.68);
-  expect(routing.orchestralHallBusGain).toBeLessThanOrEqual(0.82);
+  expect(routing.orchestralHallBusGain).toBeGreaterThan(0.72);
+  expect(routing.orchestralHallBusGain).toBeLessThanOrEqual(0.88);
   expect(routing.orchestralTapCount).toBe({ full: 10, balanced: 8, safe: 6 }[routing.audioQualityId]);
   expect(routing.orchestralHighpass).toBe(160);
   expect(routing.orchestralLowpass).toBe(12500);
-  expect(Math.min(...routing.orchestralDelays)).toBeCloseTo(0.011, 4);
-  expect(Math.max(...routing.orchestralDelays)).toBeCloseTo({ full: 0.046, balanced: 0.036, safe: 0.03 }[routing.audioQualityId], 4);
+  const hallDelayScale = routing.distanceProfiles.find((profile) => profile.id === routing.distanceProfileId).earlyDelayScale;
+  expect(Math.min(...routing.orchestralDelays)).toBeCloseTo(0.0292 * hallDelayScale, 4);
+  expect(Math.max(...routing.orchestralDelays)).toBeCloseTo(
+    { full: 0.0505, balanced: 0.0412, safe: 0.0412 }[routing.audioQualityId] * hallDelayScale,
+    4
+  );
   expect(Math.abs(routing.orchestralBalance)).toBeLessThan(1e-7);
+  expect(routing.hallDimensions).toMatchObject({
+    width: 20,
+    depth: 20,
+    height: 20,
+    wallDistance: 10,
+    speedOfSound: 343
+  });
+  expect(routing.hallField.some((direction) => direction.azimuth === 0)).toBe(true);
+  expect(routing.hallField.some((direction) => Math.abs(direction.azimuth) === 180)).toBe(true);
+  expect(routing.hallField.some((direction) => Math.abs(direction.azimuth) === 90)).toBe(true);
+  expect(routing.hallField.some((direction) => direction.elevation >= 80)).toBe(true);
+  expect(Math.min(...routing.hallField.map((direction) => direction.distance))).toBe(10);
+  expect(Math.max(...routing.hallField.map((direction) => direction.distance))).toBeCloseTo(14.14, 2);
+  expect(routing.hallField.every((direction) => (
+    direction.rendered.azimuth === direction.azimuth &&
+    direction.rendered.elevation === direction.elevation &&
+    direction.rendered.distance === direction.distance
+  ))).toBe(true);
+  expect(routing.hallField.every((direction) => (
+    Math.abs(direction.delay - direction.distance / routing.hallDimensions.speedOfSound) < 0.0001
+  ))).toBe(true);
+  expect(routing.lateEnvelopmentBusGain).toBeGreaterThan(0.45);
+  expect(routing.lateEnvelopmentBusGain).toBeLessThanOrEqual(0.72);
+  expect(routing.lateEnvelopmentSend).toBeGreaterThan(0.025);
+  expect(routing.lateEnvelopmentSend).toBeLessThanOrEqual(0.032);
+  expect(routing.lateEnvelopmentTapCount).toBe({ full: 8, balanced: 8, safe: 6 }[routing.audioQualityId]);
+  expect(Math.min(...routing.lateEnvelopmentDelays)).toBeCloseTo(0.087 * hallDelayScale, 4);
+  expect(Math.max(...routing.lateEnvelopmentDelays)).toBeCloseTo(
+    { full: 0.14, balanced: 0.14, safe: 0.122 }[routing.audioQualityId] * hallDelayScale,
+    4
+  );
+  expect(routing.lateEnvelopmentHighpass).toBe(240);
+  expect(routing.lateEnvelopmentLowpass).toBe(9200);
+  expect(routing.lateEnvelopmentDiffusionSeconds).toBeGreaterThanOrEqual(0.045);
+  expect(routing.lateEnvelopmentDiffusionSeconds).toBeLessThan(0.047);
+  expect(routing.lateEnvelopmentStartsAfterEarlyWindow).toBe(true);
+  expect(Math.abs(routing.lateEnvelopmentBalance)).toBeLessThan(1e-7);
   expect(routing.venueBusGain).toBeGreaterThan(0.1);
   expect(routing.venueBusGain).toBeLessThan(0.25);
   expect(routing.venueDuration).toBeCloseTo(3.2, 1);
-  expect(routing.venueHighpass).toBe(220);
-  expect(routing.venueLowpass).toBe(10500);
-  expect(routing.venuePreDelay).toBeCloseTo(0.006, 4);
+  const activeDistanceProfile = routing.distanceProfiles.find((profile) => profile.id === routing.distanceProfileId);
+  expect(routing.venueHighpass).toBe(activeDistanceProfile.highpass);
+  expect(routing.venueLowpass).toBe(activeDistanceProfile.lowpass);
+  expect(routing.venuePreDelay).toBeCloseTo(activeDistanceProfile.preDelay, 4);
   expect(routing.wetLowGuard).toBe(110);
   expect(routing.wetAirGuard).toBe(14500);
   expect(routing.lateralHighpass).toBe(220);
   expect(routing.fieldHighpass).toBe(320);
-  expect(routing.distanceProfileId).toBe("mid");
+  expect(routing.distanceProfileId).toBe("far");
   expect(routing.distanceProfiles).toEqual([
     { id: "near", preDelay: 0, highpass: 250, lowpass: 11500, earlyDelayScale: 0.92 },
     { id: "mid", preDelay: 0.006, highpass: 220, lowpass: 10500, earlyDelayScale: 1 },
@@ -1004,6 +1100,51 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   });
   expect(spectrumPixels).toBeGreaterThan(0);
 
+  expect(errors()).toEqual([]);
+});
+
+test("loads quality-gated guitar and piano as optional adaptive stems", async ({ page }, testInfo) => {
+  const errors = collectBrowserErrors(page);
+  await page.route("**/api/analyze?**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(createAnalysisFixture({
+        demucsCompleted: true,
+        adaptiveSix: true,
+        stereoRight: true
+      }))
+    });
+  });
+  await page.route("**/outputs/**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "audio/wav", body: createToneWav() });
+  });
+
+  await page.goto("/");
+  const filePath = testInfo.outputPath("adaptive-six-tone.wav");
+  fs.writeFileSync(filePath, createToneWav());
+  await page.locator("#audio-file").setInputFiles(filePath);
+
+  await expect(page.locator("#active-count")).toHaveText("6 stems");
+  await expect(page.locator("#instrument-list .instrument-row")).toHaveCount(6);
+  await expect(page.locator(".stage-node[data-id='guitar']")).toBeVisible();
+  await expect(page.locator(".stage-node[data-id='piano']")).toBeVisible();
+  await page.locator("#play-button").click();
+  await page.waitForTimeout(120);
+  const adaptive = await page.evaluate(() => ({
+    ids: Object.keys(state.stemBuffers || {}).sort((a, b) => STEM_ORDER.indexOf(a) - STEM_ORDER.indexOf(b)),
+    spatialIds: state.graph?.spatialLayer?.stemObjects?.map((stem) => stem.id) || [],
+    guitarConfidence: state.stemBuffers?.guitar?.quality?.hybridConfidence,
+    pianoConfidence: state.stemBuffers?.piano?.quality?.hybridConfidence,
+    required: CORE_STEM_ORDER,
+    transientControls: state.graph?.spatialLayer?.transientControls?.length
+  }));
+  expect(adaptive.ids).toEqual(["vocals", "guitar", "piano", "other", "drums", "bass"]);
+  expect(adaptive.spatialIds).toEqual(adaptive.ids);
+  expect(adaptive.guitarConfidence).toBe(0.72);
+  expect(adaptive.pianoConfidence).toBe(0.66);
+  expect(adaptive.required).toEqual(["vocals", "other", "drums", "bass"]);
+  expect(adaptive.transientControls).toBe(12);
   expect(errors()).toEqual([]);
 });
 
@@ -1194,6 +1335,20 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
         high: getStemRoomSceneScale({ id: "vocals", separation: 0.95, spatialWeight: 1 }),
         low: getStemRoomSceneScale({ id: "vocals", separation: 0.2, spatialWeight: 0.75 })
       },
+      sceneSeparation: Object.fromEntries(
+        Object.entries(graph.spatialLayer.separatedScenes || {}).map(([id, scene]) => [id, {
+          vocals: scene.vocalSend.gain.value,
+          instruments: scene.instrumentSend.gain.value,
+          residual: scene.residualSend.gain.value,
+          output: scene.output.gain.value
+        }])
+      ),
+      instrumentPresenceEq: {
+        frequency: graph.spatialLayer.instrumentPresenceEq.frequency.value,
+        gain: graph.spatialLayer.instrumentPresenceEq.gain.value,
+        q: graph.spatialLayer.instrumentPresenceEq.Q.value
+      },
+      transientControlCount: graph.spatialLayer.transientControls.length,
       compositeRendererCount: graph.spatialLayer.stemObjects.reduce((count, item) => (
         count + Number(Boolean(item.reflections.compositeRenderer)) +
         Number(Boolean(item.externalization.compositeRenderer))
@@ -1221,8 +1376,8 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
   expect(metrics.residualRatio).toBeLessThan(1e-5);
   expect(metrics.usesOriginalAnchor).toBe(false);
   expect(metrics.phasePreserving).toBe(true);
-  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeGreaterThan(0.84);
-  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeLessThan(0.86);
+  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeGreaterThan(0.76);
+  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeLessThan(0.78);
   expect(metrics.stemSpatialProfile.other.roomSceneScale).toBe(1);
   expect(metrics.stemSpatialProfile.drums.roomSceneScale).toBe(1);
   expect(metrics.stemSpatialProfile.bass.roomSceneScale).toBe(1);
@@ -1231,15 +1386,25 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
   expect(metrics.stemSpatialProfile.vocals.primaryDelays).toEqual([0, 0]);
   expect(metrics.stemSpatialProfile.vocals.reflectionSend)
     .toBeLessThan(metrics.stemSpatialProfile.other.reflectionSend);
-  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeGreaterThan(0.105);
-  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeLessThan(0.11);
+  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeGreaterThan(0.12);
+  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeLessThan(0.13);
   expect(metrics.stemSpatialProfile.vocals.confidenceSendScale).toBeLessThanOrEqual(1);
   expect(metrics.adaptiveVocalRoomScale.low).toBeGreaterThan(metrics.adaptiveVocalRoomScale.high);
+  expect(metrics.sceneSeparation.lateral.vocals).toBeLessThan(0.05);
+  expect(metrics.sceneSeparation.lateral.instruments).toBe(1);
+  expect(metrics.sceneSeparation.venue.vocals).toBeLessThan(metrics.sceneSeparation.venue.instruments * 0.5);
+  Object.values(metrics.sceneSeparation).forEach((scene) => {
+    expect(scene.output).toBeCloseTo(0.86, 4);
+  });
+  expect(metrics.instrumentPresenceEq.frequency).toBe(2650);
+  expect(metrics.instrumentPresenceEq.gain).toBeCloseTo(-0.8, 2);
+  expect(metrics.instrumentPresenceEq.q).toBeCloseTo(0.76, 2);
+  expect(metrics.transientControlCount).toBe(8);
   expect(metrics.compositeRendererCount).toBe(10);
-  expect(metrics.graphNodeCount).toBeLessThan(165);
-  expect(metrics.stemSpatialProfile.other.lateralEarlyScale).toBe(1.12);
-  expect(metrics.stemSpatialProfile.drums.lateralEarlyScale).toBe(1.08);
-  expect(metrics.externalizationTaps).toBe(20);
+  expect(metrics.graphNodeCount).toBeLessThan(195);
+  expect(metrics.stemSpatialProfile.other.lateralEarlyScale).toBe(1.16);
+  expect(metrics.stemSpatialProfile.drums.lateralEarlyScale).toBe(1.1);
+  expect(metrics.externalizationTaps).toBe(24);
   expect(metrics.loudnessMatchGain).toBeGreaterThanOrEqual(0.82);
   expect(metrics.loudnessMatchGain).toBeLessThanOrEqual(1);
   expect(metrics.truePeakHeadroomGain).toBe(1);
@@ -1504,11 +1669,11 @@ function createAnalysisFixture(options = {}) {
       deepSeparator: {
         name: "Demucs / Hybrid Transformer Demucs fine-tuned",
         model: "htdemucs_ft",
-        qualityProfile: "spatial-q2",
-        postprocess: "softmask-v1",
+        qualityProfile: "spatial-q3-adaptive6",
+        postprocess: "softmask-v2-hybrid",
         settings: {
-          profile: "spatial-q2",
-          postprocess: "softmask-v1",
+          profile: "spatial-q3-adaptive6",
+          postprocess: "softmask-v2-hybrid",
           device: "cuda",
           shifts: 2,
           overlap: 0.36,
@@ -1522,6 +1687,10 @@ function createAnalysisFixture(options = {}) {
         stems: options.demucsCompleted
           ? [
               "_cache/demucs/test/vocals.wav",
+              ...(options.adaptiveSix ? [
+                "_cache/demucs/test/guitar.wav",
+                "_cache/demucs/test/piano.wav"
+              ] : []),
               "_cache/demucs/test/other.wav",
               "_cache/demucs/test/drums.wav",
               "_cache/demucs/test/bass.wav"
@@ -1530,6 +1699,10 @@ function createAnalysisFixture(options = {}) {
         stemQuality: options.demucsCompleted
           ? {
               vocals: { separation: 0.78, spatialWeight: 0.98 },
+              ...(options.adaptiveSix ? {
+                guitar: { separation: 0.76, spatialWeight: 0.98, hybridConfidence: 0.72, adaptivelyAccepted: true },
+                piano: { separation: 0.7, spatialWeight: 0.94, hybridConfidence: 0.66, adaptivelyAccepted: true }
+              } : {}),
               other: { separation: 0.74, spatialWeight: 0.96 },
               drums: { separation: 0.82, spatialWeight: 1.02 },
               bass: { separation: 0.8, spatialWeight: 1 }
@@ -1689,6 +1862,8 @@ test("automatically applies the universal HRTF and concert-hall BRIR", async ({ 
       impulseMetrics: {
         edt: impulseMetrics.edtSeconds,
         t20: impulseMetrics.t20Seconds,
+        iaccLate: impulseMetrics.iaccLate,
+        listenerEnvelopment: impulseMetrics.listenerEnvelopment,
         bandIds: Object.keys(impulseMetrics.bandIacc)
       },
       cacheFunctions: [
@@ -1706,6 +1881,10 @@ test("automatically applies the universal HRTF and concert-hall BRIR", async ({ 
   expect(quality.transientCount).toBeGreaterThanOrEqual(0);
   expect(Number.isFinite(quality.impulseMetrics.edt)).toBeTruthy();
   expect(Number.isFinite(quality.impulseMetrics.t20)).toBeTruthy();
+  expect(quality.impulseMetrics.iaccLate).toBeGreaterThanOrEqual(-1);
+  expect(quality.impulseMetrics.iaccLate).toBeLessThanOrEqual(1);
+  expect(quality.impulseMetrics.listenerEnvelopment).toBeGreaterThanOrEqual(0);
+  expect(quality.impulseMetrics.listenerEnvelopment).toBeLessThanOrEqual(1);
   expect(quality.impulseMetrics.bandIds).toEqual(["low", "mid", "high"]);
   expect(quality.cacheFunctions).toEqual(["function", "function", "function", "function"]);
 
@@ -1732,7 +1911,6 @@ test("stores HQ renders as bounded IndexedDB chunks and can cancel queued work",
     await deletePersistentSpatialCacheEntry(database, metadata);
     state.spatialRenderCacheStatus = "queued";
     state.spatialRenderCacheProgress = 18;
-    updateSpatialRenderCacheUi();
     cancelSpatialRenderCache({ silent: true });
     return {
       chunkCount: metadata.chunkCount,

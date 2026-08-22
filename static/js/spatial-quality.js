@@ -206,13 +206,17 @@
       else clarityLate += energy;
     }
     const iacc80 = normalizedCrossCorrelation(left, right, onsetIndex, earlyEnd, Math.round(sampleRate * 0.001));
+    const lateEnd = Math.min(length, earlyEnd + Math.round(sampleRate * 1.5));
+    const iaccLate = normalizedCrossCorrelation(left, right, earlyEnd, lateEnd, Math.round(sampleRate * 0.001));
     const decay = estimateEnergyDecay(left, right, onsetIndex, sampleRate);
     const bandIacc = analyzeBandIacc(left, right, onsetIndex, earlyEnd, sampleRate);
     return Object.freeze({
       peakDbfs: toDb(peak),
       balanceDb: 10 * Math.log10(Math.max(1e-12, leftEnergy) / Math.max(1e-12, rightEnergy)),
       iacc80,
+      iaccLate,
       apparentWidth: clamp(1 - Math.max(0, iacc80), 0, 1),
+      listenerEnvelopment: clamp(1 - Math.max(0, iaccLate), 0, 1),
       drrDb: 10 * Math.log10(Math.max(1e-12, earlyEnergy) / Math.max(1e-12, lateEnergy)),
       c50Db: 10 * Math.log10(Math.max(1e-12, clarityEarly) / Math.max(1e-12, clarityLate)),
       c80Db: 10 * Math.log10(

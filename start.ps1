@@ -50,7 +50,21 @@ if ($staleListener) {
         throw "포트 8768을 다른 프로그램이 사용 중입니다. 해당 프로그램을 종료한 뒤 다시 실행하세요."
     }
     Write-Host "이전 버전 Spatial Audio 서버를 종료하고 v$expectedVersion(으)로 갱신합니다."
-    Stop-Process -Id $staleListener.OwningProcess -Force
+    $staleProcessId = $staleListener.OwningProcess
+    Stop-Process -Id $staleProcessId -Force
+    Wait-Process -Id $staleProcessId -Timeout 5 -ErrorAction SilentlyContinue
+
+    # Windows가 종료된 서버의 포트를 반환할 때까지 기다린 뒤 새 서버를 시작한다.
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        $remainingListener = Get-NetTCPConnection -LocalPort 8768 -State Listen -ErrorAction SilentlyContinue
+        if (-not $remainingListener) {
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    if (Get-NetTCPConnection -LocalPort 8768 -State Listen -ErrorAction SilentlyContinue) {
+        throw "기존 Spatial Audio 서버가 포트 8768을 반환하지 않았습니다. 잠시 후 다시 실행하세요."
+    }
 }
 
 if (Test-Path -LiteralPath $venvPython) {

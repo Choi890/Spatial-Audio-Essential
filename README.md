@@ -1,20 +1,20 @@
 # Spatial Audio Essential
 
 **실측 다중 BRIR과 합성 FIR을 활용한 실시간 공간음향 렌더러**
-현재 버전: **v1.11**
+현재 버전: **v1.17**
 
 Spatial Audio Essential은 Demucs로 분리한 스테레오 stem을 binaural 직접음 객체로 다시 렌더링하고, 분리 과정에서 누락된 성분은 mixture residual로 보존하는 공간음향 스튜디오입니다.
 
-v1.11에서는 AIR v1.4에 포함된 네 개의 실측 공간 응답을 사용합니다.
+v1.17에서는 음질과 공간 렌더링 구조를 유지하면서 CPU/GPU 병렬 분석, 콘텐츠 기반 Stem 캐시, 제한형 캐시 정리, 공간 에셋 검증 캐시와 불필요한 UI 렌더링 제거를 적용했습니다.
 
 * Meeting Room
 * Lecture Room
 * Stairway
 * Aula Carolina
 
-Full Spatial 출력은 원본 Dry 신호를 그대로 섞는 방식이 아닙니다. `vocals`, `drums`, `bass`, `other` stem의 기존 L/R sample phase를 지연 없는 primary path에 유지하고, 원본에서 보정된 stem 합을 뺀 residual도 동일한 경로로 합산합니다.
+Full Spatial 출력은 원본 Dry 신호를 그대로 섞는 방식이 아닙니다. 핵심 `vocals`, `drums`, `bass`, `other`와 품질 게이트를 통과한 `guitar`, `piano` Stem의 기존 L/R sample phase를 지연 없는 primary path에 유지하고, 원본에서 보정된 Stem 합을 뺀 residual도 동일한 경로로 합산합니다.
 
-측정 HRTF는 직접음이 아니라 방향성 반사, 3~4m 외재화 셸, 후기 공간 응답을 만드는 데 사용합니다. 완전히 처리되지 않은 원본은 비교용 `Original` 모드에서만 재생됩니다.
+측정 HRTF는 직접음이 아니라 앞 스테이지 외재화, 20m 공연장의 전후·좌우·천장 방향성 반사, 후기 공간 응답을 만드는 데 사용합니다. 완전히 처리되지 않은 원본은 비교용 `Original` 모드에서만 재생됩니다.
 
 ---
 
@@ -67,7 +67,7 @@ Full Spatial QA는 음악 구간 자체를 분석하지 않습니다. 렌더러�
 
 실시간 상관도와 transient 감시는 AudioWorklet에서 수행합니다. 긴 곡의 room-send automation은 전체 이벤트를 한 번에 예약하지 않고 rolling window 방식으로 순차 예약합니다.
 
-방향별 HRTF 경로는 동일한 선형 응답을 하나의 합성 FIR로 통합해 실시간 DSP 부하를 줄였습니다. 또한 3~4m 외재화 링과 후면·천장 반사 에너지 재분배를 통해 전후·상하를 포함한 사방 공간감을 확장합니다.
+방향별 HRTF 경로는 동일한 선형 응답을 하나의 합성 FIR로 통합해 실시간 DSP 부하를 줄였습니다. 또한 20×20×20m 공연장 중앙에서 벽 10m, 벽 모서리 14.14m, 공간 모서리 17.32m에 해당하는 반사 좌표와 음속 기반 지연을 사용해 전후·좌우·상하 공간을 확장합니다.
 
 ---
 
@@ -101,7 +101,7 @@ HQ 렌더 결과는 IndexedDB에 8MB 단위 chunk로 저장됩니다. 입력 파
 ### 프런트엔드
 
 * `static/app.js`
-  Full Spatial 및 Original 그래프, stem 직접음, mixture residual, 3~4m 외재화 셸, 측정 BRIR 렌더러, stem analyser UI를 구성합니다.
+  Full Spatial 및 Original 그래프, stem 직접음, mixture residual, 앞 스테이지 외재화와 20m 공연장 필드, 측정 BRIR 렌더러, stem analyser UI를 구성합니다.
 
 * `static/js/config.js`
   stem 표시 정보와 실시간 악기 signature를 정의합니다.
@@ -228,7 +228,7 @@ Demucs 공식 저장소는 현재 archived 상태이므로, 프로젝트에서�
 기본 분석 프로필은 다음과 같습니다.
 
 ```powershell
-$env:SPATIAL_DEMUCS_SHIFTS = "2"
+$env:SPATIAL_DEMUCS_SHIFTS = "2"  # 품질 보존 기본값
 $env:SPATIAL_DEMUCS_OVERLAP = "0.36"
 $env:SPATIAL_DEMUCS_SEGMENT = "7"
 $env:SPATIAL_DEMUCS_JOBS = "1"
@@ -252,9 +252,11 @@ $env:SPATIAL_DEMUCS_JOBS = "1"
 
 ### Demucs stem 생성
 
-Demucs 분석이 성공하면 `spatial-q2` 품질 프로파일로 다음 stem을 생성합니다.
+Demucs 분석이 성공하면 `spatial-q3-adaptive6` 품질 프로파일로 다음 Stem을 생성합니다. `htdemucs_ft` 결과를 핵심 품질 기준으로 사용하고, `htdemucs_6s`의 기타·피아노 후보는 투영 적합도, 핵심 Stem 누출, 에너지 비율과 후보 간 중복 검사를 통과한 경우에만 독립 Stem으로 승격합니다.
 
 * vocals
+* guitar (품질 통과 시)
+* piano (품질 통과 시)
 * other
 * drums
 * bass
@@ -308,7 +310,7 @@ Full Spatial은 원본 Dry 버퍼를 출력에 직접 연결하지 않습니다.
 
 전면, 측면, 후면, 상부 방향으로 구성된 측정 HRTF 셸을 사용합니다.
 
-기본 반경은 약 2.4~3m이며, 전체 외재화 구조는 설정에 따라 약 3~4m 범위까지 확장됩니다.
+연주자 외재화 셸은 청취자 앞 7.2~11.8m 스테이지에 놓이며, 공간 반사는 20×20×20m 공연장의 벽·모서리·천장 좌표에 배치됩니다.
 
 각 방향에는 다음 처리가 적용됩니다.
 
@@ -361,15 +363,18 @@ Primary path에는 L/R 직접음 객체를 유지하고, 여기에 mono-null lat
 
 다음 위치를 모사하는 HRTF 반사를 추가합니다.
 
-* 무대 가장자리
+* 전면 벽
 * 측벽
-* 발코니
 * 천장
-* 후면 갤러리
+* 후면 벽과 상부 모서리
 
-반사 지연은 9.5~38ms 범위이며, 좌우 대칭 방향쌍으로 구성됩니다.
+기본 반사 지연은 29.2~50.5ms 범위이며, 좌우 대칭 방향쌍으로 구성됩니다. 선택된 거리 프로필에 따라 전파 지연만 제한적으로 늘어납니다.
 
 이 반사들은 직접음을 대체하지 않고, 오케스트라 홀과 같은 폭, 높이, 후면 에너지, 잔향 연결감을 만드는 보조 공간 버스로 동작합니다.
+
+### 후기 포위감
+
+초기 측면 반사는 직접음 도착 후 80ms 이내에서 apparent source width를 만들고, 별도의 late-envelopment 레이어는 80ms 이후에만 동작합니다. 후기 레이어는 측면·후면·상부 방향쌍과 46ms 희소 확산 FIR을 사용하며 240Hz~9.2kHz로 제한합니다. 측정 BRIR 후기장과 합산되지만 송출량은 낮게 유지해 개별 반사가 에코로 들리거나 보컬이 뒤로 밀리지 않게 합니다.
 
 ---
 
@@ -584,7 +589,7 @@ GPU 메모리와 시스템 RAM이 충분하지 않은 환경에서는 기본값 
 
 ### 분석 캐시
 
-성공한 4-stem 분석은 다음 값을 조합한 키로 캐시합니다.
+성공한 적응형 4~6 Stem 분석은 다음 값을 조합한 키로 캐시합니다.
 
 * 입력 콘텐츠 해시
 * 분석 프로필

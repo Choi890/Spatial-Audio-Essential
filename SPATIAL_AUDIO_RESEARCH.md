@@ -2,7 +2,7 @@
 
 ## 범위
 
-공간음향 문헌 전체를 문자 그대로 구현하는 것은 불가능하며 바람직하지도 않다. 연구마다 재생 장치, 입력 포맷, 청취자 측정, 헤드트래킹, 다채널 스피커와 같은 전제가 다르기 때문이다. 이 문서는 현재 프로젝트의 입력인 stereo music, Demucs 4-stem, 브라우저 Web Audio, 고정 청취자, binaural headphone output에 직접 적용할 수 있는 연구 축을 정리한다.
+공간음향 문헌 전체를 문자 그대로 구현하는 것은 불가능하며 바람직하지도 않다. 연구마다 재생 장치, 입력 포맷, 청취자 측정, 헤드트래킹, 다채널 스피커와 같은 전제가 다르기 때문이다. 이 문서는 현재 프로젝트의 입력인 stereo music, 적응형 Demucs 4~6 Stem, 브라우저 Web Audio, 고정 청취자, binaural headphone output에 직접 적용할 수 있는 연구 축을 정리한다.
 
 적용 원칙은 다음과 같다.
 
@@ -26,9 +26,14 @@
 | BRIR early/late 경계 | [Meesawat & Hammershøi, 2003](https://secure.aes.org/forum/pubs/conventions/?elib=12346) | 연구에서 작은 지각 차이로 tail 교환이 가능했던 40–60ms 범위 안의 45ms를 경계로 정했다. 측정 응답의 직접음은 제거해 앱의 dry/anchor와 중복하지 않는다. |
 | 과도한 decorrelation artifact | [First-Order DirAC](https://research.aalto.fi/en/publications/first-order-directional-audio-coding-dirac/) | time-varying decorrelator를 쓰지 않는다. 고정된 zero-mean sparse velvet FIR을 220Hz 이상 wet side에만 적용하고 좌우를 정확한 반대 극성으로 만들어 mono 합을 보존한다. |
 | 저역 공간화의 coloration·위상 위험 | [Blauert, Spatial Hearing](https://link.springer.com/book/10.1007/978-3-642-37762-4), [W3C Web Audio BiquadFilterNode](https://www.w3.org/TR/webaudio-1.1/#BiquadFilterNode) | Primary 저역은 처리하지 않고 lateral 220Hz, mid-derived side 700Hz, diffuse 320Hz 이상으로 분리한다. room bus에만 최대 ±1.2dB 저차수 정규화 EQ를 둔다. |
-| Hybrid Transformer source separation | [Rouard et al., 2022](https://arxiv.org/abs/2211.08553), [Défossez, 2021](https://arxiv.org/abs/2111.03600) | `htdemucs_ft` 4-stem을 primary object로 쓰되, mixture-consistency scale과 residual로 분리 누락을 보존한다. |
+| Hybrid Transformer source separation | [Rouard et al., 2022](https://arxiv.org/abs/2211.08553), [Défossez, 2021](https://arxiv.org/abs/2111.03600) | `htdemucs_ft` 4 Stem을 품질 기준으로 유지하고 `htdemucs_6s`의 guitar/piano가 누출·투영·에너지 게이트를 통과할 때만 승격한다. mixture-consistency scale과 residual로 분리 누락을 보존한다. |
 | Stereo-to-binaural coherence | [Interaural Coherence Matching](https://secure.aes.org/forum/pubs/conventions/?elib=15283) | Primary stem과 residual의 L/R sample phase를 그대로 유지하며 lateral field의 상관도 guard를 자동 테스트한다. |
 | Early reflections와 externalization | [Hassager et al., 2018](https://pubmed.ncbi.nlm.nih.gov/29857749/) | Primary에는 인위적 delay를 두지 않고 early/diffuse/late field를 분리해 외재화 단서는 늘리되 직접음 명료도를 보호한다. |
+| 초기 측면 반사와 apparent source width | [Barron, 1971](https://doi.org/10.1016/0022-460X(71)90406-8) | 10~80ms 측면 반사를 전면·천장 반사보다 우선해 무대 폭을 만들고, 직접음은 별도 0ms primary에 유지한다. |
+| 후기 반사와 listener envelopment | [Barron, 2001](https://doi.org/10.1016/S0003-682X(00)00055-4) | 80ms 이후의 측면 에너지를 별도 LEV 레이어로 분리하고 후면·상부 방향을 대칭으로 보강한다. |
+| 반사의 binaural 변동과 외재화 | [Catic et al., 2015](https://pubmed.ncbi.nlm.nih.gov/26328729/) | 정면 음원의 외재화를 위해 반사장의 양이간 단서를 보존하고, 고정 mono 잔향으로 축소하지 않는다. |
+| 직접음과 잔향의 HRTF spectral detail | [Hassager et al., 2016](https://pubmed.ncbi.nlm.nih.gov/27250190/) | 직접음·초기 방향 단서의 스펙트럼을 보호하되 후기장은 9.2kHz low-pass와 저강도 확산으로 과도한 generic pinna coloration을 억제한다. |
+| 자연 음원의 방향성과 반사 차수 | [Steffens et al., 2021](https://pubmed.ncbi.nlm.nih.gov/33940902/) | 방향성이 지각적으로 중요한 직접음과 1차 반사는 Stem 객체가 담당하고, 후기 확산장에는 세부 방향성을 반복 적용하지 않는다. |
 | 디지털 overload와 true-peak 위험 | [ITU-R BS.1770-5](https://www.itu.int/rec/R-REC-BS.1770-5-202311-I) | K-weighting 절대/상대 게이팅 LUFS-I, 8× windowed-sinc inter-sample peak 추정, 처리 후 peak/RMS preflight와 단일 peak guard로 headroom을 확보한다. |
 
 ## 현재 주파수별 공간 정책
@@ -44,7 +49,9 @@
 | Scene diffuse field | primary 별도 보존 | 320Hz |
 | Measured venue late field | primary·early 별도 보존 | 220Hz |
 
-Full Spatial은 2.4~3m 반경의 전·측·후·상부 외재화 셸과 9.5~38ms의 좌우 대칭 무대·측벽·발코니·천장·후면 반사를 함께 사용합니다. 측정 late field는 220Hz~10.5kHz로 사용하며 Primary L/R 위상은 이 레이어와 분리됩니다.
+Full Spatial은 연주자를 앞 스테이지에 고정한 채 20×20×20m 공연장 중앙을 기준으로 전면·측면·후면·천장 반사를 함께 사용합니다. 벽 10m, 벽 모서리 14.14m, 공간 모서리 17.32m 좌표에 음속 343m/s 기반 29.2~50.5ms 지연을 적용하며 좌우 반사는 완전 대칭입니다. 측정 late field는 220Hz~10.5kHz로 사용하고 Primary L/R 위상은 이 레이어와 분리합니다.
+
+공간적 폭과 포위감은 별도로 렌더링합니다. 80ms 이전의 측면 초기 반사는 apparent source width를 담당하고, 80ms 이후의 후기 레이어는 측면·후면·상부 8방향에 87~140ms 기본 지연과 5~44ms 희소 확산을 적용합니다. 후기장은 240Hz~9.2kHz로 제한하며 측정 BRIR이 있을 때 send를 3.2%로 제한합니다. QA는 초기 `IACC80`과 후기 `IACC late`를 따로 계산합니다.
 
 Room 출력만 110Hz high-pass와 14.5kHz low-pass 안에서 동작합니다. 165Hz/340Hz의 누적 에너지를 낮추고 4.2kHz 존재감을 복원하는 최대 ±1.2dB 정규화 EQ도 room bus에만 적용합니다. 직접음과 stereo bass는 별도 full-band primary bus가 담당합니다.
 
