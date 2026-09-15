@@ -1130,7 +1130,7 @@ test("loads quality-gated guitar and piano as optional adaptive stems", async ({
   await expect(page.locator(".stage-node[data-id='guitar']")).toBeVisible();
   await expect(page.locator(".stage-node[data-id='piano']")).toBeVisible();
   await page.locator("#play-button").click();
-  await page.waitForTimeout(120);
+  await page.waitForFunction(() => state.graph?.spatialLayer?.stemObjects?.length === 6);
   const adaptive = await page.evaluate(() => ({
     ids: Object.keys(state.stemBuffers || {}).sort((a, b) => STEM_ORDER.indexOf(a) - STEM_ORDER.indexOf(b)),
     spatialIds: state.graph?.spatialLayer?.stemObjects?.map((stem) => stem.id) || [],
