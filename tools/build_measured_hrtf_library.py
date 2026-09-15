@@ -200,7 +200,7 @@ def build_source(source: SourceProfile, cache_dir: Path) -> dict[str, object]:
     runtime_path = OUTPUT_DIR / profile["rendering"]["runtimeAsset"]
     profile_path = OUTPUT_DIR / f"{source.id}.json"
     write_runtime(runtime_path, positions, impulses, sample_rate)
-    profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"profile={profile_path.name} directions={len(positions)} runtime={runtime_path.stat().st_size}")
     return {
         "id": source.id,
@@ -239,6 +239,7 @@ def main() -> None:
     (OUTPUT_DIR / "profiles.json").write_text(
         json.dumps(registry, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 

@@ -2,3 +2,7 @@
 data/assets-manifest.json text eol=lf
 data/brir/** -text
 data/hrtf/** -text
+data/brir/*.json text eol=lf
+data/brir/*.txt text eol=lf
+data/hrtf/*.json text eol=lf
+data/hrtf/*.txt text eol=lf

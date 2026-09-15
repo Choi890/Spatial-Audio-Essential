@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Spatial Audio Listening Evaluation</title>
-  <link rel="stylesheet" href="styles.css?v=1.17.0">
+  <link rel="stylesheet" href="styles.css?v=1.18.0">
 </head>
 <body>
   <main class="evaluation-shell">
@@ -12,14 +12,19 @@
     <h1>Spatial Audio 주관 평가</h1>
     <p class="evaluation-note">동일 곡의 Original과 Full Spatial WAV를 넣으면 순서를 무작위화합니다. 헤드폰·볼륨·청취 위치를 고정하고 각 항목을 0–100으로 평가하세요. 이 도구는 MUSHRA 방식의 반복 비교를 돕지만, 단일 청취 결과가 공식 적합성 인증을 뜻하지는 않습니다.</p>
     <div class="evaluation-actions">
-      <label>Original/Reference <input id="reference-file" type="file" accept="audio/wav,audio/*"></label>
-      <label>Full Spatial <input id="spatial-file" type="file" accept="audio/wav,audio/*"></label>
+      <label>Original/Reference <input id="reference-file" type="file" accept="audio/wav,.wav"></label>
+      <label>Full Spatial <input id="spatial-file" type="file" accept="audio/wav,.wav"></label>
+      <label>분리 없는 공간 효과 (선택) <input id="fullmix-file" type="file" accept="audio/wav,.wav"></label>
+      <label>Stem별 공간 효과 (선택) <input id="stems-file" type="file" accept="audio/wav,.wav"></label>
+      <label>모든 파일의 EQ 조건 <select id="eq-condition"><option value="off">모든 조건에서 EQ 끔</option><option value="matched">동일한 EQ를 미리 적용함</option><option value="uncontrolled">EQ가 다르거나 확인하지 않음</option></select></label>
       <button class="primary-button" id="prepare" type="button">블라인드 세션 만들기</button>
       <button class="ghost-button" id="save" type="button" disabled>결과 JSON 저장</button>
       <a class="ghost-button" href="/">스튜디오로 돌아가기</a>
     </div>
+    <p class="evaluation-note">동일한 시작점·길이의 WAV 구간을 사용하세요. 서버가 LUFS와 true peak를 측정해 재생 음량을 맞춥니다. 공간 효과만 비교하려면 모든 파일에서 기기 EQ를 끄거나 동일하게 적용하세요. EQ 선택은 기록용이며 파일의 EQ를 변경하지 않습니다. 재생 위치는 전환 시 유지되지만 원본 파일의 지연 정렬은 자동으로 수행하지 않습니다.</p>
+    <p id="session-status" role="status"></p>
     <section class="evaluation-grid" id="candidates" aria-live="polite"></section>
   </main>
-  <script src="/js/mushra.js?v=1.17.0"></script>
+  <script src="/js/mushra.js?v=1.18.0"></script>
 </body>
 </html>

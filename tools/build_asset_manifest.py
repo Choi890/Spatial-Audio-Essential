@@ -51,6 +51,7 @@ def main() -> None:
     MANIFEST_PATH.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     print(f"assets={len(records)} manifest={MANIFEST_PATH}")
 

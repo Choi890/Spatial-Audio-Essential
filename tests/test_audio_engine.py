@@ -25,6 +25,7 @@ from backend.audio_engine import (
     load_audio,
     measure_master_output,
     read_stem_quality,
+    resample_linear,
     run_cancellable_command,
     run_demucs_model,
     AnalysisCancelledError,
@@ -73,10 +74,35 @@ class AudioEngineRegressionTests(unittest.TestCase):
 
     def test_demucs_cache_id_keeps_each_song_isolated(self) -> None:
         first = build_demucs_cache_id("a" * 64, "htdemucs_ft")
-        second = build_demucs_cache_id("b" * 64, "htdemucs_ft")
+        second = build_demucs_cache_id("a" * 63 + "b", "htdemucs_ft")
         self.assertNotEqual(first, second)
-        self.assertIn("a" * 32, first)
-        self.assertIn("b" * 32, second)
+        self.assertEqual(first, build_demucs_cache_id("a" * 64, "htdemucs_ft"))
+        self.assertNotEqual(first, build_demucs_cache_id("a" * 64, "htdemucs_6s"))
+        with patch("backend.audio_engine.DEMUCS_OVERLAP", 0.3601):
+            self.assertNotEqual(first, build_demucs_cache_id("a" * 64, "htdemucs_ft"))
+        self.assertNotEqual(build_demucs_cache_id("song-x", "model"),
+                            build_demucs_cache_id("song-y", "model"))
+        self.assertEqual(build_demucs_cache_id(None, "model"), "")
+
+    def test_analysis_resampling_rejects_alias_and_preserves_passband(self) -> None:
+        timeline = np.arange(48_000) / 48_000
+        for frequency, minimum, maximum in [(1000, 0.99, 1.01), (16000, 0, 0.001)]:
+            source = np.sin(2 * np.pi * frequency * timeline).astype(np.float32)
+            result = resample_linear(source, 48_000, 22_050)
+            amplitude = np.sqrt(2 * np.mean(result[500:-500] ** 2))
+            self.assertEqual(len(result), 22_050)
+            self.assertEqual(result.dtype, np.float32)
+            self.assertGreaterEqual(amplitude, minimum)
+            self.assertLess(amplitude, maximum)
+
+    def test_analysis_resampling_handles_empty_short_and_stereo_inputs(self) -> None:
+        for count in (0, 1, 17, 480):
+            source = np.ones((count, 2), dtype=np.float32)
+            result = resample_linear(source, 48_000, 22_050)
+            self.assertEqual(result.shape, (int(np.ceil(count * 22050 / 48000)), 2))
+            self.assertTrue(np.all(np.isfinite(result)))
+        source = np.arange(10, dtype=np.float32)
+        np.testing.assert_array_equal(resample_linear(source, 48000, 48000), source)
 
     def test_cached_demucs_stems_must_match_source_duration(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

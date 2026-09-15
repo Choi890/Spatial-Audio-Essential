@@ -50,8 +50,8 @@ SUPPORTED_DEMUCS_MODELS = frozenset({"htdemucs_ft", "htdemucs"})
 DEMUCS_MODEL = os.environ.get("SPATIAL_SEPARATOR_MODEL", "htdemucs_ft")
 if DEMUCS_MODEL not in SUPPORTED_DEMUCS_MODELS:
     DEMUCS_MODEL = "htdemucs_ft"
-ANALYSIS_PROFILE_VERSION = "fullband-neutral-v5-cache-safe"
-APP_VERSION = "1.17.0"
+ANALYSIS_PROFILE_VERSION = "fullband-neutral-v6-antialias"
+APP_VERSION = "1.18.0"
 UPLOAD_CHUNK_WRITE_LIMIT = MAX_BODY_BYTES
 ALLOWED_AUDIO_EXTENSIONS = {
     ".aac",

@@ -145,6 +145,7 @@ def main() -> None:
     (OUTPUT_DIR / "profiles.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     print(f"profiles={len(PROFILES)} output={OUTPUT_DIR}")
 

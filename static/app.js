@@ -51,7 +51,7 @@ const BRIR_LIBRARY_URL = "/brir/profiles.json?v=20260803-brir-library-v2";
 const DEFAULT_BRIR_PROFILE_ID = "aula";
 const SPATIAL_RENDER_CACHE_MAX_BYTES = 384 * 1024 * 1024;
 const SPATIAL_RENDER_CACHE_MAX_ENTRIES = 2;
-const SPATIAL_RENDER_PIPELINE_VERSION = "v114-asw-lev-split";
+const SPATIAL_RENDER_PIPELINE_VERSION = "v118-contiguous-analysis";
 const SPATIAL_CACHE_DB_NAME = "spatial-audio-essential-render-cache";
 const SPATIAL_CACHE_DB_VERSION = 1;
 const SPATIAL_CACHE_CHUNK_BYTES = 8 * 1024 * 1024;

@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import lfilter
+from scipy.signal import lfilter, resample_poly
 
 
 def read_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -43,13 +43,13 @@ def read_float_env(name: str, default: float, minimum: float, maximum: float) ->
 ANALYSIS_SR = 22050
 MAX_BODY_BYTES = 420 * 1024 * 1024
 TARGET_TIMELINE_POINTS = 900
-ANALYSIS_PROFILE_VERSION = "fullband-neutral-v5-cache-safe"
+ANALYSIS_PROFILE_VERSION = "fullband-neutral-v6-antialias"
 DEMUCS_CACHE_MAX_BYTES = 12 * 1024 * 1024 * 1024
 DEMUCS_CACHE_MAX_AGE_DAYS = 30
 DEMUCS_CACHE_PRUNE_INTERVAL_SECONDS = 6 * 60 * 60
 DEMUCS_QUALITY_PROFILE = "spatial-q3-adaptive6"
 DEMUCS_POSTPROCESS_VERSION = "softmask-v2-hybrid"
-DEMUCS_CACHE_LAYOUT_VERSION = "content-v2"
+DEMUCS_CACHE_LAYOUT_VERSION = "content-v3"
 DEMUCS_AUXILIARY_MODEL = "htdemucs_6s"
 # 두 번의 equivariant stabilization을 유지해 속도 최적화가 분리 품질을 낮추지 않게 한다.
 DEMUCS_SHIFTS = read_int_env("SPATIAL_DEMUCS_SHIFTS", 2, 1, 10)
@@ -177,13 +177,14 @@ def measure_master_output(input_path: Path) -> dict[str, Any]:
 
 
 def resample_linear(samples: np.ndarray, source_sr: int, target_sr: int) -> np.ndarray:
+    """Anti-aliased analysis resampling; retain the historical API name."""
+    if source_sr <= 0 or target_sr <= 0:
+        raise ValueError("Sample rates must be positive")
     if source_sr == target_sr or len(samples) == 0:
         return samples.astype(np.float32, copy=False)
-    duration = len(samples) / float(source_sr)
-    target_count = max(1, int(round(duration * target_sr)))
-    old_x = np.linspace(0.0, duration, len(samples), endpoint=False, dtype=np.float64)
-    new_x = np.linspace(0.0, duration, target_count, endpoint=False, dtype=np.float64)
-    return np.interp(new_x, old_x, samples).astype(np.float32)
+    divisor = math.gcd(source_sr, target_sr)
+    return resample_poly(samples, target_sr // divisor, source_sr // divisor,
+                         axis=0, window=("kaiser", 8.6)).astype(np.float32)
 
 
 def stft_magnitude(samples: np.ndarray, n_fft: int, hop_length: int) -> np.ndarray:
@@ -1517,17 +1518,12 @@ def build_demucs_cache_id(cache_key: str | None, model_name: str) -> str:
     """곡 식별자가 잘리지 않는 충돌 방지형 Demucs 캐시 키를 만든다."""
     if not cache_key:
         return ""
-    content_id = re.sub(r"[^a-f0-9]", "", cache_key.lower())[:32]
-    if not content_id:
-        return ""
-    settings = (
-        f"{DEMUCS_CACHE_LAYOUT_VERSION}|{model_name}|{DEMUCS_QUALITY_PROFILE}|"
-        f"{DEMUCS_POSTPROCESS_VERSION}|{DEMUCS_AUXILIARY_MODEL}|"
-        f"s{DEMUCS_SHIFTS}|o{DEMUCS_OVERLAP:.3f}|g{DEMUCS_SEGMENT_SECONDS}"
-    )
-    settings_id = hashlib.sha256(settings.encode("utf-8")).hexdigest()[:12]
-    model_id = re.sub(r"[^A-Za-z0-9_-]", "", model_name)[:18]
-    return f"{DEMUCS_CACHE_LAYOUT_VERSION}_{content_id}_{settings_id}_{model_id}"
+    identity = json.dumps([
+        DEMUCS_CACHE_LAYOUT_VERSION, cache_key, model_name, DEMUCS_QUALITY_PROFILE,
+        DEMUCS_POSTPROCESS_VERSION, DEMUCS_AUXILIARY_MODEL,
+        DEMUCS_SHIFTS, DEMUCS_OVERLAP, DEMUCS_SEGMENT_SECONDS,
+    ], ensure_ascii=True, separators=(",", ":"))
+    return f"{DEMUCS_CACHE_LAYOUT_VERSION}_{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
 
 
 def cached_demucs_stems_match_source(stem_paths: list[Path], input_path: Path) -> bool:

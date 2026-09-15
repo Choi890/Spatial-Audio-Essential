@@ -1,9 +1,13 @@
 # Spatial Audio Essential
 
 **실측 다중 BRIR과 합성 FIR을 활용한 실시간 공간음향 렌더러**
-현재 버전: **v1.17**
+현재 버전: **v1.18**
 
 Spatial Audio Essential은 일반적인 스테레오 음악의 원래 음상과 inter-channel phase를 가능한 한 보존하면서, **source separation, measured HRTF/BRIR, binaural rendering, objective QA**를 결합해 공간적 외재화와 방향성 반사를 추가하는 실시간 공간음향 시스템입니다.
+
+**연구용 프로토타입입니다.** 구현과 회귀 테스트는 있지만, 분리 없는 공간 처리 대비 음질·외재화 개선을 입증한 청취 실험 결과는 아직 없습니다. 기여 범위는 **직접음 복원 구조를 유지하면서 stem별 공간 효과를 제어하는 시스템 구현**입니다. 직접음 복원은 최종 출력의 주파수 응답·위상 보존을 보장하지 않습니다.
+
+v1.18에서는 전체 파일 식별자와 설정의 SHA-256 캐시 키, 안티앨리어싱 분석 리샘플링, 원래 샘플레이트의 연속 구간 분석, 절댓값 기반 IACC를 적용했습니다. 청취평가에는 LUFS 음량 맞춤·재생 위치 유지·비교 조건 추가·EQ 조건 기록을 보강했습니다. 검증 범위와 실험 절차는 [EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md)에 정리했습니다.
 
 v1.17에서는 음질과 공간 렌더링 구조를 유지하면서 CPU/GPU 병렬 분석, 콘텐츠 기반 Stem 캐시, 제한형 캐시 정리, 공간 에셋 검증 캐시와 불필요한 UI 렌더링 제거를 적용했습니다.
 
@@ -32,7 +36,7 @@ Full Spatial 출력은 원본 Dry 신호를 그대로 섞는 방식이 아닙니
 
 ## Main Contributions
 
-### 1. Phase-preserving stem reconstruction
+### 1. Direct-path stem and residual reconstruction
 
 Demucs(`htdemucs_ft`)를 이용해 입력 음악을 `vocals`, `drums`, `bass`, `other`의 네 stem으로 분리합니다.
 
@@ -47,6 +51,8 @@ Residual = Original - Sum(Aligned Stems)
 신뢰할 수 있는 정렬을 찾지 못한 경우에는 원본 L/R sample phase를 유지하는 fallback 경로로 전환합니다.
 
 Primary path에는 인위적인 panning, HRTF convolution, 추가 delay를 적용하지 않습니다.
+
+동일하게 정합한 stem을 같은 이득으로 더하면 `Sum(Aligned Stems) + Residual = Original`입니다. 이 등식은 신호 합산 구조의 성질이며 새로운 분리 성능을 증명하지 않습니다. 반사·잔향·기기 EQ·출력 이득을 적용한 최종 출력은 원본과 달라집니다. Demucs의 필요성은 **분리 없는 full-mix 공간 처리 대비 stem별 공간 처리의 이득**으로 검증해야 합니다.
 
 ### 2. Measured HRTF / BRIR spatial rendering
 
@@ -82,9 +88,11 @@ HRTF는 직접음을 대체하기보다 directional reflection과 externalizatio
 
 또한 `/mushra`에서 `Original`과 `Full Spatial`을 무작위 순서로 비교할 수 있는 주관 평가 보조 도구를 제공합니다.
 
+선택적으로 분리 없는 공간 처리와 stem별 공간 처리 WAV를 추가할 수 있습니다. 서버가 입력별 LUFS-I·추정 true peak를 측정하고 감쇠만으로 음량을 맞춥니다. 파일 길이가 50ms 넘게 다르면 세션 생성을 차단합니다. 재생 위치는 전환 시 유지하지만 파일 간 지연 정렬과 EQ 일치 여부는 사용자가 확인해야 합니다. EQ 선택은 기록용입니다.
+
 ### 4. Reproducibility and regression testing
 
-프로젝트는 Python unit test와 Playwright 기반 UI/E2E 테스트를 포함하며, GitHub Actions에서 Windows 환경 기준으로 자동 회귀 검증을 수행합니다.
+프로젝트는 Python·Node DSP 테스트와 Playwright 기반 UI/E2E 테스트를 포함합니다. GitHub Actions에는 Windows 전체 테스트와 Linux의 Python·Node DSP/자산 검증을 구성했습니다.
 
 검증 항목에는 residual 상쇄, primary path 지연, mono compatibility, stereo correlation, finite output, peak guard, graph disposal 등이 포함됩니다.
 
@@ -136,6 +144,8 @@ HRTF Reflections     Lateral Field   BRIR Late Field
 
 현재 프로젝트에는 객관 지표 계산과 주관 평가 도구가 구현되어 있습니다. 다만 README에는 아직 동일 입력 조건에서 수행한 대표 benchmark 결과를 고정해 두지 않았습니다.
 
+임펄스 QA는 `ignoreStems: true`로 실행하는 full-mix 경로 진단입니다. 실제 stem 분리부터 최종 청취까지의 검증 결과로 해석하면 안 됩니다. 합성 신호 회귀 테스트와 대표 음악·사람 대상 청취평가도 구분합니다. `1 − IACC`는 폭·포위감 관련 보조 수치이며 지각 평가 점수가 아닙니다. 현재 DRR은 onset 이후 10ms를 직접음 구간으로 가정하는 근사값입니다.
+
 따라서 아래 값은 임의의 수치를 넣지 않고, 향후 동일한 test material과 level-matching 조건에서 재현 가능한 결과를 확보한 뒤 업데이트할 예정입니다.
 
 | Metric | Original | Full Spatial | Purpose |
@@ -179,7 +189,7 @@ HRTF Reflections     Lateral Field   BRIR Late Field
 ## Documentation
 
 - `SPATIAL_AUDIO_RESEARCH.md` — 논문 및 표준 적용 근거, 적용/제외 기술, 검증 규칙
-- `PROJECT_STRUCTURE.md` — 시스템 구조와 DSP 파이프라인
+- `EVALUATION_PROTOCOL.md` — 수정 검증 범위와 분리 유무 비교 실험 절차
 - `DEVICE_CORRECTION.md` — 출력 기기별 보정 원칙과 한계
 - `tests/` — backend, DSP, UI regression tests
 - `.github/workflows/ci.yml` — 자동 회귀 검증

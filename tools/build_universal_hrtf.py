@@ -218,7 +218,7 @@ def main() -> None:
     directions = [(elevation, azimuth) for elevation in elevations for azimuth in azimuths]
     impulses = np.stack([generate_hrir(azimuth, elevation) for elevation, azimuth in directions])
     profile = build_profile(directions)
-    PROFILE_PATH.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    PROFILE_PATH.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     write_sofa(directions, impulses)
     write_runtime_asset(directions, impulses)
     print(f"profile={PROFILE_PATH} sha256={hashlib.sha256(PROFILE_PATH.read_bytes()).hexdigest()}")

@@ -21,8 +21,17 @@
     const sampleRate = Math.max(8000, Number(buffer?.sampleRate) || 48000);
     const length = Math.max(0, Number(buffer?.length) || 0);
     const maximumSamples = Math.max(4096, Math.round((options.maximumSeconds || 4) * sampleRate));
-    const stride = Math.max(1, Math.ceil(length / maximumSamples));
-    return { sampleRate, length, stride };
+    const skip = Math.min(length, Math.max(0, Math.round((options.skipSeconds ?? 0.05) * sampleRate)));
+    const available = length - skip;
+    const budget = Math.min(available, maximumSamples);
+    // Distributed contiguous windows keep the original Nyquist frequency.
+    const count = Math.max(1, Math.min(8, Math.ceil(budget / (sampleRate * 0.5))));
+    const windowLength = Math.floor(budget / count);
+    const windows = Array.from({ length: count }, (_, index) => {
+      const start = skip + (count === 1 ? 0 : Math.floor(index * (available - windowLength) / (count - 1)));
+      return { start, end: start + windowLength };
+    });
+    return { sampleRate, windows };
   }
 
   // 두 개의 1차 필터를 직렬로 사용해 분석 전용의 가벼운 대역 통과 응답을 만든다.
@@ -45,28 +54,34 @@
     const right = channelData(buffer, 1) || left;
     if (!left || !right) return { bands: [], averageCorrelation: 1, stereo: false };
     const bands = options.bands || DEFAULT_BANDS;
-    const { sampleRate, length, stride } = sampleWindow(buffer, options);
-    const skip = Math.min(length, Math.round((options.skipSeconds || 0.05) * sampleRate));
+    const { sampleRate, windows } = sampleWindow(buffer, options);
     const results = bands.map((band) => {
-      const leftFilter = createBandSampler(sampleRate / stride, band.low, band.high);
-      const rightFilter = createBandSampler(sampleRate / stride, band.low, band.high);
       let ll = 0;
       let rr = 0;
       let lr = 0;
       let side = 0;
       let mid = 0;
       let count = 0;
-      for (let index = skip; index < length; index += stride) {
-        const l = leftFilter(left[index] || 0);
-        const r = rightFilter(right[index] || 0);
-        ll += l * l;
-        rr += r * r;
-        lr += l * r;
-        const m = (l + r) * 0.5;
-        const s = (l - r) * 0.5;
-        mid += m * m;
-        side += s * s;
-        count += 1;
+      for (const { start, end } of windows) {
+        const leftFilter = createBandSampler(sampleRate, band.low, band.high);
+        const rightFilter = createBandSampler(sampleRate, band.low, band.high);
+        // Warm the filters using real preceding samples at each discontinuity.
+        for (let index = Math.max(0, start - Math.round(sampleRate * 0.05)); index < start; index += 1) {
+          leftFilter(left[index] || 0);
+          rightFilter(right[index] || 0);
+        }
+        for (let index = start; index < end; index += 1) {
+          const l = leftFilter(left[index] || 0);
+          const r = rightFilter(right[index] || 0);
+          ll += l * l;
+          rr += r * r;
+          lr += l * r;
+          const m = (l + r) * 0.5;
+          const s = (l - r) * 0.5;
+          mid += m * m;
+          side += s * s;
+          count += 1;
+        }
       }
       const correlation = clamp(lr / Math.sqrt(Math.max(1e-12, ll * rr)), -1, 1);
       const sideRatio = clamp(side / Math.max(1e-12, side + mid), 0, 1);
@@ -131,23 +146,24 @@
   }
 
   function normalizedCrossCorrelation(left, right, start, end, maximumLag) {
-    let best = -1;
+    let best = 0;
     for (let lag = -maximumLag; lag <= maximumLag; lag += 1) {
       let lr = 0;
       let ll = 0;
       let rr = 0;
       const from = Math.max(start, start - lag);
       const to = Math.min(end, end - lag);
-      for (let index = from; index < to; index += 2) {
+      for (let index = from; index < to; index += 1) {
         const l = left[index] || 0;
         const r = right[index + lag] || 0;
         lr += l * r;
         ll += l * l;
         rr += r * r;
       }
-      best = Math.max(best, lr / Math.sqrt(Math.max(1e-12, ll * rr)));
+      const denominator = Math.sqrt(ll * rr);
+      if (denominator > 0) best = Math.max(best, Math.abs(lr) / denominator);
     }
-    return clamp(best, -1, 1);
+    return clamp(best, 0, 1);
   }
 
   function analyzeBinauralResponse(buffer) {
@@ -312,12 +328,14 @@
     const left = channelData(buffer, 0);
     const right = channelData(buffer, 1) || left;
     if (!left || !right) return -120;
-    const stride = Math.max(1, Math.ceil(buffer.length / 240000));
+    const { windows } = sampleWindow(buffer, { skipSeconds: 0 });
     let energy = 0;
     let count = 0;
-    for (let index = 0; index < buffer.length; index += stride) {
-      energy += (left[index] || 0) ** 2 + (right[index] || 0) ** 2;
-      count += 2;
+    for (const { start, end } of windows) {
+      for (let index = start; index < end; index += 1) {
+        energy += (left[index] || 0) ** 2 + (right[index] || 0) ** 2;
+        count += 2;
+      }
     }
     return toDb(Math.sqrt(energy / Math.max(1, count)));
   }
