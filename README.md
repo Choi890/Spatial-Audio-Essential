@@ -3,7 +3,7 @@
 **실측 다중 BRIR과 합성 FIR을 활용한 실시간 공간음향 렌더러**
 현재 버전: **v1.17**
 
-Spatial Audio Essential은 Demucs로 분리한 스테레오 stem을 binaural 직접음 객체로 다시 렌더링하고, 분리 과정에서 누락된 성분은 mixture residual로 보존하는 공간음향 스튜디오입니다.
+Spatial Audio Essential은 일반적인 스테레오 음악의 원래 음상과 inter-channel phase를 가능한 한 보존하면서, **source separation, measured HRTF/BRIR, binaural rendering, objective QA**를 결합해 공간적 외재화와 방향성 반사를 추가하는 실시간 공간음향 시스템입니다.
 
 v1.17에서는 음질과 공간 렌더링 구조를 유지하면서 CPU/GPU 병렬 분석, 콘텐츠 기반 Stem 캐시, 제한형 캐시 정리, 공간 에셋 검증 캐시와 불필요한 UI 렌더링 제거를 적용했습니다.
 
@@ -17,6 +17,178 @@ Full Spatial 출력은 원본 Dry 신호를 그대로 섞는 방식이 아닙니
 측정 HRTF는 직접음이 아니라 앞 스테이지 외재화, 20m 공연장의 전후·좌우·천장 방향성 반사, 후기 공간 응답을 만드는 데 사용합니다. 완전히 처리되지 않은 원본은 비교용 `Original` 모드에서만 재생됩니다.
 
 ---
+
+## Research Question
+
+> **스테레오 음악의 기존 직접음과 inter-channel phase를 최대한 보존하면서 공간감과 externalization을 확장할 수 있는가?**
+
+이 질문을 바탕으로 다음 세 가지 설계 원칙을 사용합니다.
+
+1. 직접음 primary path는 기존 stereo L/R sample phase를 유지합니다.
+2. 공간 정보는 직접음을 강제로 재배치하지 않고, HRTF 기반 방향성 반사와 measured BRIR late field를 통해 추가합니다.
+3. Source separation에서 누락된 신호는 mixture residual을 계산해 다시 보존합니다.
+
+---
+
+## Main Contributions
+
+### 1. Phase-preserving stem reconstruction
+
+Demucs(`htdemucs_ft`)를 이용해 입력 음악을 `vocals`, `drums`, `bass`, `other`의 네 stem으로 분리합니다.
+
+분리된 stem의 합과 원본 사이의 공통 sample lag와 gain을 정합한 뒤,
+
+```text
+Residual = Original - Sum(Aligned Stems)
+```
+
+을 계산하여 source separation 과정에서 누락된 성분을 보존합니다.
+
+신뢰할 수 있는 정렬을 찾지 못한 경우에는 원본 L/R sample phase를 유지하는 fallback 경로로 전환합니다.
+
+Primary path에는 인위적인 panning, HRTF convolution, 추가 delay를 적용하지 않습니다.
+
+### 2. Measured HRTF / BRIR spatial rendering
+
+SADIE II의 측정 HRIR과 RWTH Aachen AIR Database의 실측 room response를 사용합니다.
+
+현재 HRTF 프로파일:
+
+- KEMAR
+- KU100
+- Human 003
+- Human 009
+
+현재 측정 공간 응답:
+
+- Meeting Room
+- Lecture Room
+- Stairway
+- Aula Carolina
+
+HRTF는 직접음을 대체하기보다 directional reflection과 externalization layer를 생성하는 데 사용합니다.
+
+### 3. Objective and subjective evaluation
+
+렌더러의 stereo impulse response와 최종 출력을 기준으로 다음 지표를 분석합니다.
+
+- IACC80
+- C50 / C80
+- DRR
+- EDT / T20
+- ITU-R BS.1770-5 Integrated Loudness
+- 8× oversampled True Peak
+- Stereo correlation
+
+또한 `/mushra`에서 `Original`과 `Full Spatial`을 무작위 순서로 비교할 수 있는 주관 평가 보조 도구를 제공합니다.
+
+### 4. Reproducibility and regression testing
+
+프로젝트는 Python unit test와 Playwright 기반 UI/E2E 테스트를 포함하며, GitHub Actions에서 Windows 환경 기준으로 자동 회귀 검증을 수행합니다.
+
+검증 항목에는 residual 상쇄, primary path 지연, mono compatibility, stereo correlation, finite output, peak guard, graph disposal 등이 포함됩니다.
+
+---
+
+## System Pipeline
+
+```text
+Stereo Music
+     |
+     v
+Demucs Source Separation
+     |
+     +-- Vocals
+     +-- Drums
+     +-- Bass
+     +-- Other
+     |
+     v
+Sample / Gain Alignment
+     |
+     +--------------------+
+     |                    |
+     v                    v
+Stem Primary        Mixture Residual
+     |                    |
+     +---------+----------+
+               |
+               v
+     Phase-coherent Primary
+               |
+     +---------+----------+-------------+
+     |                    |             |
+     v                    v             v
+HRTF Reflections     Lateral Field   BRIR Late Field
+     |                    |             |
+     +---------+----------+-------------+
+               |
+               v
+          Full Spatial
+               |
+               v
+   LUFS / True Peak / Spatial QA
+```
+
+---
+
+## Evaluation Status
+
+현재 프로젝트에는 객관 지표 계산과 주관 평가 도구가 구현되어 있습니다. 다만 README에는 아직 동일 입력 조건에서 수행한 대표 benchmark 결과를 고정해 두지 않았습니다.
+
+따라서 아래 값은 임의의 수치를 넣지 않고, 향후 동일한 test material과 level-matching 조건에서 재현 가능한 결과를 확보한 뒤 업데이트할 예정입니다.
+
+| Metric | Original | Full Spatial | Purpose |
+|---|---:|---:|---|
+| IACC80 | TBD | TBD | Lateral spatial impression |
+| C80 | TBD | TBD | Musical clarity |
+| DRR | TBD | TBD | Direct / reverberant balance |
+| Integrated LUFS | TBD | TBD | Level matching |
+| True Peak | TBD | TBD | Output safety |
+| Stereo Correlation | TBD | TBD | Phase stability |
+
+---
+
+## Current Limitations
+
+현재 시스템은 연구 및 개인 실험을 위한 prototype입니다.
+
+- 개인 측정 HRTF를 사용하지 않습니다.
+- Head tracking 및 6DoF를 지원하지 않습니다.
+- 비개인 HRTF이므로 사용자마다 localization / externalization 성능이 다를 수 있습니다.
+- 입력은 mono/stereo music으로 제한됩니다.
+- 현재 source separation은 Demucs에 의존합니다.
+- 객관적 spatial metric만으로 실제 청취 품질을 완전히 설명할 수 없으므로 주관 청취평가가 필요합니다.
+- 현재 AIR 기반 BRIR은 직접음 전체를 그대로 사용하지 않고, primary path와 중복을 피하기 위해 제한된 late-field 용도로 사용합니다.
+
+---
+
+## Research Direction
+
+향후에는 다음 연구 방향으로 확장할 수 있습니다.
+
+- Deep-learning-based sound source localization
+- Joint source separation and spatial estimation
+- Personalized HRTF estimation
+- Listener / environment-adaptive spatial audio
+- Objective-subjective spatial quality correlation
+- Separation confidence와 공간 파라미터를 함께 최적화하는 adaptive rendering
+
+---
+
+## Documentation
+
+- `SPATIAL_AUDIO_RESEARCH.md` — 논문 및 표준 적용 근거, 적용/제외 기술, 검증 규칙
+- `PROJECT_STRUCTURE.md` — 시스템 구조와 DSP 파이프라인
+- `DEVICE_CORRECTION.md` — 출력 기기별 보정 원칙과 한계
+- `tests/` — backend, DSP, UI regression tests
+- `.github/workflows/ci.yml` — 자동 회귀 검증
+
+---
+
+# Detailed Implementation
+
+아래는 현재 구현의 세부 동작과 실행 방법입니다.
 
 ## 주요 특징
 
