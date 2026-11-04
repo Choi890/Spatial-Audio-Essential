@@ -1,88 +1,39 @@
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import json
-import logging
 import math
-import os
-import re
-import shutil
-import signal
-import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
 import numpy as np
-import soundfile as sf
-from scipy.signal import lfilter, resample_poly
+from backend.features import (
+    ANALYSIS_SR,
+    AnalysisFrames,
+    choose_hop_length,
+    chromagram_from_magnitude,
+    clamp01,
+    clamp_curve,
+    clamp_value,
+    compress_series,
+    estimate_tempo,
+    estimate_tempo_confidence,
+    mel_filterbank,
+    normalize_curve,
+    resample_linear,
+    resize_curve,
+    spectral_centroid,
+    spectral_flatness,
+    spectral_flux,
+    spectral_rolloff,
+    stft_magnitude,
+)
+from backend.audio_io import db, estimate_true_peak_8x, integrated_loudness_bs1770, load_audio
+from backend.separation import detect_demucs_device, inspect_demucs, raise_if_cancelled
 
-
-def read_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
-    try:
-        value = int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        value = default
-    return int(np.clip(value, minimum, maximum))
-
-
-def read_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
-    try:
-        value = float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        value = default
-    return float(np.clip(value, minimum, maximum))
-
-
-ANALYSIS_SR = 22050
 MAX_BODY_BYTES = 420 * 1024 * 1024
-TARGET_TIMELINE_POINTS = 900
-ANALYSIS_PROFILE_VERSION = "fullband-neutral-v6-antialias"
-DEMUCS_CACHE_MAX_BYTES = 12 * 1024 * 1024 * 1024
-DEMUCS_CACHE_MAX_AGE_DAYS = 30
-DEMUCS_CACHE_PRUNE_INTERVAL_SECONDS = 6 * 60 * 60
-DEMUCS_QUALITY_PROFILE = "spatial-q3-adaptive6"
-DEMUCS_POSTPROCESS_VERSION = "softmask-v2-hybrid"
-DEMUCS_CACHE_LAYOUT_VERSION = "content-v3"
-DEMUCS_AUXILIARY_MODEL = "htdemucs_6s"
-# 두 번의 equivariant stabilization을 유지해 속도 최적화가 분리 품질을 낮추지 않게 한다.
-DEMUCS_SHIFTS = read_int_env("SPATIAL_DEMUCS_SHIFTS", 2, 1, 10)
-DEMUCS_OVERLAP = read_float_env("SPATIAL_DEMUCS_OVERLAP", 0.36, 0.1, 0.75)
-DEMUCS_SEGMENT_SECONDS = read_int_env("SPATIAL_DEMUCS_SEGMENT", 7, 4, 7)
-DEMUCS_JOBS = read_int_env("SPATIAL_DEMUCS_JOBS", 1, 1, max(1, min(4, os.cpu_count() or 1)))
-DEMUCS_CORE_STEM_IDS = frozenset({"vocals", "other", "drums", "bass"})
-DEMUCS_OPTIONAL_STEM_IDS = frozenset({"guitar", "piano"})
-DEMUCS_STEM_IDS = DEMUCS_CORE_STEM_IDS | DEMUCS_OPTIONAL_STEM_IDS
-STEM_MASK_FLOORS = {
-    "vocals": 0.16,
-    "other": 0.22,
-    "drums": 0.18,
-    "bass": 0.26,
-    "guitar": 0.2,
-    "piano": 0.24,
-}
-LOGGER = logging.getLogger("spatial_audio.engine")
-_DEMUCS_CACHE_PRUNE_LOCK = threading.Lock()
-_demucs_cache_last_prune = 0.0
-
-
-class AnalysisCancelledError(RuntimeError):
-    """Raised when the caller cancels CPU/GPU analysis work."""
-
-
-class AudioChannelLayoutError(ValueError):
-    """Raised when input is not mono or stereo, the supported binaural source layouts."""
-
-
-def raise_if_cancelled(cancel_event: threading.Event | None) -> None:
-    if cancel_event is not None and cancel_event.is_set():
-        raise AnalysisCancelledError("Audio analysis was cancelled")
+ANALYSIS_PROFILE_VERSION = "fullband-neutral-v7-batched"
 
 
 @dataclass(frozen=True)
@@ -117,203 +68,6 @@ INSTRUMENTS: tuple[Instrument, ...] = (
     Instrument("piano", "Piano", "keyboard", -2.35, 0.2, -3.7, 1250, 0.72, "#d6c4a0"),
 )
 
-def _validate_audio_channels(data: np.ndarray) -> np.ndarray:
-    channel_count = 1 if data.ndim == 1 else int(data.shape[1])
-    if channel_count not in (1, 2):
-        raise AudioChannelLayoutError(
-            f"Only mono or stereo sources are supported; received {channel_count} channels"
-        )
-    return np.nan_to_num(data)
-
-
-def load_audio(input_path: Path) -> tuple[np.ndarray, int]:
-    try:
-        data, sample_rate = sf.read(str(input_path), always_2d=True, dtype="float32")
-    except Exception:
-        data = None
-    if data is not None:
-        return _validate_audio_channels(data), int(sample_rate)
-    converted = input_path.with_suffix(".decoded.wav")
-    try:
-        ffmpeg = shutil.which("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("Audio decoder unavailable")
-        command = [
-            ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(input_path),
-            "-vn",
-            "-acodec",
-            "pcm_f32le",
-            str(converted),
-        ]
-        subprocess.run(command, check=True, capture_output=True, text=True, timeout=240)
-        data, sample_rate = sf.read(str(converted), always_2d=True, dtype="float32")
-        return _validate_audio_channels(data), int(sample_rate)
-    except Exception:
-        converted.unlink(missing_ok=True)
-        raise
-
-
-def measure_master_output(input_path: Path) -> dict[str, Any]:
-    """Measure the final rendered mono/stereo master with the production meters."""
-    samples, sample_rate = load_audio(input_path)
-    sample_peak = float(np.max(np.abs(samples))) if samples.size else 0.0
-    true_peak = estimate_true_peak_8x(samples)
-    return {
-        "sampleRate": sample_rate,
-        "channels": int(samples.shape[1]) if samples.ndim > 1 else 1,
-        "duration": round(float(len(samples) / max(sample_rate, 1)), 4),
-        "samplePeakDb": round(db(max(sample_peak, 1e-9)), 3),
-        "estimatedTruePeakDb": round(db(true_peak), 3),
-        "truePeakOversampling": 8,
-        "integratedLufs": round(integrated_loudness_bs1770(samples, sample_rate), 3),
-        "loudnessStandard": "ITU-R BS.1770-5 gated",
-    }
-
-
-def resample_linear(samples: np.ndarray, source_sr: int, target_sr: int) -> np.ndarray:
-    """Anti-aliased analysis resampling; retain the historical API name."""
-    if source_sr <= 0 or target_sr <= 0:
-        raise ValueError("Sample rates must be positive")
-    if source_sr == target_sr or len(samples) == 0:
-        return samples.astype(np.float32, copy=False)
-    divisor = math.gcd(source_sr, target_sr)
-    return resample_poly(samples, target_sr // divisor, source_sr // divisor,
-                         axis=0, window=("kaiser", 8.6)).astype(np.float32)
-
-
-def stft_magnitude(samples: np.ndarray, n_fft: int, hop_length: int) -> np.ndarray:
-    samples = np.asarray(samples, dtype=np.float32)
-    if len(samples) == 0:
-        return np.zeros((n_fft // 2 + 1, 1), dtype=np.float32)
-    pad = n_fft // 2
-    padded = np.pad(samples, (pad, pad), mode="constant")
-    frame_count = max(1, 1 + (len(padded) - n_fft) // hop_length)
-    shape = (frame_count, n_fft)
-    strides = (padded.strides[0] * hop_length, padded.strides[0])
-    frames = np.lib.stride_tricks.as_strided(padded, shape=shape, strides=strides).copy()
-    window = np.hanning(n_fft).astype(np.float32)
-    spectrum = np.fft.rfft(frames * window[None, :], axis=1)
-    return np.abs(spectrum).T.astype(np.float32)
-
-
-def frame_rms(samples: np.ndarray, n_fft: int, hop_length: int, frame_count: int) -> np.ndarray:
-    samples = np.asarray(samples, dtype=np.float32)
-    pad = n_fft // 2
-    padded = np.pad(samples, (pad, pad), mode="constant")
-    values = np.zeros(frame_count, dtype=np.float32)
-    for index in range(frame_count):
-        start = index * hop_length
-        frame = padded[start : start + n_fft]
-        if len(frame) < n_fft:
-            frame = np.pad(frame, (0, n_fft - len(frame)))
-        values[index] = float(np.sqrt(np.mean(frame * frame) + 1e-12))
-    return values
-
-
-def spectral_flux(magnitude: np.ndarray) -> np.ndarray:
-    log_mag = np.log1p(magnitude)
-    diff = np.diff(log_mag, axis=1, prepend=log_mag[:, :1])
-    flux = np.mean(np.maximum(diff, 0), axis=0)
-    return normalize_curve(flux)
-
-
-def spectral_centroid(magnitude: np.ndarray, freqs: np.ndarray) -> np.ndarray:
-    denom = np.sum(magnitude, axis=0) + 1e-9
-    return (np.sum(magnitude * freqs[:, None], axis=0) / denom).astype(np.float32)
-
-
-def spectral_rolloff(power: np.ndarray, freqs: np.ndarray, roll_percent: float) -> np.ndarray:
-    cumulative = np.cumsum(power, axis=0)
-    threshold = cumulative[-1, :] * roll_percent
-    indices = np.argmax(cumulative >= threshold[None, :], axis=0)
-    return freqs[np.clip(indices, 0, len(freqs) - 1)].astype(np.float32)
-
-
-def spectral_flatness(magnitude: np.ndarray) -> np.ndarray:
-    safe = np.maximum(magnitude, 1e-9)
-    geometric = np.exp(np.mean(np.log(safe), axis=0))
-    arithmetic = np.mean(safe, axis=0) + 1e-9
-    return np.clip(geometric / arithmetic, 0, 1).astype(np.float32)
-
-
-def zero_crossing_rate(samples: np.ndarray, n_fft: int, hop_length: int, frame_count: int) -> np.ndarray:
-    pad = n_fft // 2
-    padded = np.pad(samples, (pad, pad), mode="constant")
-    values = np.zeros(frame_count, dtype=np.float32)
-    for index in range(frame_count):
-        frame = padded[index * hop_length : index * hop_length + n_fft]
-        if len(frame) < 2:
-            continue
-        signs = np.signbit(frame)
-        values[index] = float(np.mean(signs[1:] != signs[:-1]))
-    return values
-
-
-def chromagram_from_magnitude(power: np.ndarray, freqs: np.ndarray) -> np.ndarray:
-    chroma = np.zeros((12, power.shape[1]), dtype=np.float32)
-    valid = freqs > 27.5
-    valid_freqs = freqs[valid]
-    if valid_freqs.size == 0:
-        return chroma
-    midi = np.rint(12 * np.log2(valid_freqs / 440.0) + 69).astype(int)
-    pitch_classes = np.mod(midi, 12)
-    for pitch_class in range(12):
-        mask = pitch_classes == pitch_class
-        if np.any(mask):
-            chroma[pitch_class] = np.sum(power[valid][mask], axis=0)
-    denom = np.max(chroma, axis=0, keepdims=True) + 1e-9
-    return np.clip(chroma / denom, 0, 1)
-
-
-def estimate_tempo(onset_env: np.ndarray, sample_rate: int, hop_length: int) -> float:
-    onset = normalize_curve(onset_env)
-    if onset.size < 8 or np.max(onset) <= 0:
-        return 0.0
-    onset = onset - np.mean(onset)
-    corr = np.correlate(onset, onset, mode="full")[len(onset) - 1 :]
-    min_bpm, max_bpm = 50, 190
-    min_lag = max(1, int(round((60 * sample_rate) / (max_bpm * hop_length))))
-    max_lag = min(len(corr) - 1, int(round((60 * sample_rate) / (min_bpm * hop_length))))
-    if max_lag <= min_lag:
-        return 0.0
-    lag = int(np.argmax(corr[min_lag : max_lag + 1]) + min_lag)
-    return round(float(60 * sample_rate / (lag * hop_length)), 1)
-
-
-def mel_filterbank(
-    *,
-    sample_rate: int,
-    n_fft: int,
-    n_mels: int,
-    fmin: float,
-    fmax: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    def hz_to_mel(freq: np.ndarray | float) -> np.ndarray | float:
-        return 2595.0 * np.log10(1.0 + np.asarray(freq) / 700.0)
-
-    def mel_to_hz(mel: np.ndarray | float) -> np.ndarray | float:
-        return 700.0 * (10 ** (np.asarray(mel) / 2595.0) - 1.0)
-
-    mel_points = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), n_mels + 2)
-    hz_points = mel_to_hz(mel_points).astype(np.float32)
-    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sample_rate)
-    filters = np.zeros((n_mels, len(freqs)), dtype=np.float32)
-    for index in range(n_mels):
-        left, center, right = hz_points[index], hz_points[index + 1], hz_points[index + 2]
-        left_slope = (freqs - left) / max(center - left, 1e-9)
-        right_slope = (right - freqs) / max(right - center, 1e-9)
-        filters[index] = np.maximum(0, np.minimum(left_slope, right_slope))
-        total = np.sum(filters[index])
-        if total > 0:
-            filters[index] /= total
-    return filters, hz_points[1:-1]
-
 
 def analyze_audio(
     input_path: Path,
@@ -328,8 +82,11 @@ def analyze_audio(
 ) -> dict[str, Any]:
     # 업로드된 오디오를 분석해 프론트엔드가 바로 렌더링할 수 있는 표준 JSON payload를 만든다.
     # 로드, 리샘플, STFT, 템포/키/믹스/악기 추정, Demucs 확인이 이 함수 안에서 순서대로 이어진다.
+    analysis_started = time.perf_counter()
+    timings: dict[str, float] = {}
     raise_if_cancelled(cancel_event)
     y, source_sr = load_audio(input_path)
+    timings["decodeSeconds"] = time.perf_counter() - analysis_started
     raise_if_cancelled(cancel_event)
     if y.ndim == 1:
         channels = 1
@@ -348,23 +105,26 @@ def analyze_audio(
     hop_length = choose_hop_length(len(mono_analysis))
     n_fft = 4096
 
-    magnitude = stft_magnitude(mono_analysis, n_fft=n_fft, hop_length=hop_length)
+    frames = AnalysisFrames(mono_analysis, n_fft, hop_length)
+    magnitude = frames.magnitude()
     power = magnitude**2
     freqs = np.fft.rfftfreq(n_fft, d=1.0 / ANALYSIS_SR).astype(np.float32)
     times = (np.arange(magnitude.shape[1], dtype=np.float32) * hop_length / ANALYSIS_SR).astype(np.float32)
 
-    rms = frame_rms(mono_analysis, n_fft=n_fft, hop_length=hop_length, frame_count=magnitude.shape[1])
+    rms = frames.rms()
     onset_env = spectral_flux(magnitude)
     centroid = spectral_centroid(magnitude, freqs)
     rolloff = spectral_rolloff(power, freqs, roll_percent=0.85)
     flatness = spectral_flatness(magnitude)
-    zcr = zero_crossing_rate(mono_analysis, n_fft=n_fft, hop_length=hop_length, frame_count=magnitude.shape[1])
+    zcr = frames.zero_crossings()
     chroma = chromagram_from_magnitude(power, freqs)
     raise_if_cancelled(cancel_event)
 
     tempo = estimate_tempo(onset_env, ANALYSIS_SR, hop_length)
 
-    nmf_result = run_nmf_instrument_model(mono_analysis, hop_length, n_fft)
+    feature_started = time.perf_counter()
+    nmf_result = run_nmf_instrument_model(mono_analysis, hop_length, n_fft, magnitude=magnitude)
+    timings["nmfSeconds"] = time.perf_counter() - feature_started
     raise_if_cancelled(cancel_event)
     curves = refine_instrument_curves(
         nmf_result["curves"],
@@ -391,6 +151,8 @@ def analyze_audio(
     stereo_image = build_stereo_image(y, source_sr, curves, n_fft=n_fft, hop_length=hop_length)
     key = estimate_key(chroma)
     sections = build_sections(times, rms, centroid, onset_env, curves, duration)
+    timings["featureSeconds"] = time.perf_counter() - analysis_started
+    separator_started = time.perf_counter()
     demucs = inspect_demucs(
         request_demucs,
         input_path,
@@ -401,11 +163,14 @@ def analyze_audio(
         cancel_event=cancel_event,
     )
     raise_if_cancelled(cancel_event)
+    timings["separatorSeconds"] = time.perf_counter() - separator_started
+    timings["wallSeconds"] = time.perf_counter() - analysis_started
 
     return {
         "jobId": job_id,
         "cacheKey": cache_key or job_id,
         "analysisProfile": ANALYSIS_PROFILE_VERSION,
+        "analysisTiming": {key: round(value, 3) for key, value in timings.items()},
         "file": {
             "name": input_path.name,
             "sampleRate": int(source_sr),
@@ -459,31 +224,16 @@ def analyze_audio_optimized(
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """CUDA 분리와 CPU 특성 분석을 겹쳐 전체 대기 시간을 줄인다."""
+    started = time.perf_counter()
+    options = dict(job_id=job_id, output_dir=output_dir, demucs_model=demucs_model,
+                   cache_key=cache_key, demucs_cache_key=demucs_cache_key, cancel_event=cancel_event)
     if not request_demucs or detect_demucs_device() != "cuda":
-        return analyze_audio(
-            input_path,
-            job_id=job_id,
-            output_dir=output_dir,
-            request_demucs=request_demucs,
-            demucs_model=demucs_model,
-            cache_key=cache_key,
-            demucs_cache_key=demucs_cache_key,
-            cancel_event=cancel_event,
-        )
+        return analyze_audio(input_path, request_demucs=request_demucs, **options)
 
     effective_cancel_event = cancel_event or threading.Event()
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="spatial-analysis") as executor:
-        feature_future = executor.submit(
-            analyze_audio,
-            input_path,
-            job_id=job_id,
-            output_dir=output_dir,
-            request_demucs=False,
-            demucs_model=demucs_model,
-            cache_key=cache_key,
-            demucs_cache_key=demucs_cache_key,
-            cancel_event=effective_cancel_event,
-        )
+        options["cancel_event"] = effective_cancel_event
+        feature_future = executor.submit(analyze_audio, input_path, request_demucs=False, **options)
         separator_future = executor.submit(
             inspect_demucs,
             True,
@@ -508,25 +258,19 @@ def analyze_audio_optimized(
         separator,
     )
     result["analysisExecution"] = "parallel-cpu-features-cuda-demucs"
+    result.setdefault("analysisTiming", {}).update({
+        "wallSeconds": round(time.perf_counter() - started, 3),
+        "separatorSeconds": separator.get("timing", {}).get("totalSeconds", 0),
+    })
     return result
 
 
-def choose_hop_length(sample_count: int) -> int:
-    if sample_count <= 0:
-        return 512
-    raw = int(math.ceil(sample_count / TARGET_TIMELINE_POINTS))
-    return int(np.clip(round_to_powerish(raw), 512, 8192))
-
-
-def round_to_powerish(value: int) -> int:
-    choices = np.array([512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192])
-    return int(choices[np.argmin(np.abs(choices - value))])
-
-
-def run_nmf_instrument_model(samples: np.ndarray, hop_length: int, n_fft: int) -> dict[str, Any]:
+def run_nmf_instrument_model(samples: np.ndarray, hop_length: int, n_fft: int,
+                             magnitude: np.ndarray | None = None) -> dict[str, Any]:
     # NMF는 스펙트럼에서 반복되는 패턴을 분해해 악기 활동 곡선처럼 해석한다.
     # 실제 악기 분리 모델이 아니라 빠른 fallback 분석이므로, 이후 refine 단계에서 RMS/onset/centroid로 보정한다.
-    magnitude = stft_magnitude(samples, n_fft=n_fft, hop_length=hop_length)
+    if magnitude is None:
+        magnitude = stft_magnitude(samples, n_fft=n_fft, hop_length=hop_length)
     filterbank, mel_freqs = mel_filterbank(
         sample_rate=ANALYSIS_SR,
         n_fft=n_fft,
@@ -588,7 +332,7 @@ def numpy_nmf(x: np.ndarray, component_count: int, max_iter: int = 140) -> tuple
         spectra *= numerator_h / denominator_h
 
         numerator_w = matrix @ spectra.T
-        denominator_w = (activations @ spectra @ spectra.T) + eps
+        denominator_w = (activations @ (spectra @ spectra.T)) + eps
         activations *= numerator_w / denominator_w
 
         if iteration % 12 == 0:
@@ -864,8 +608,10 @@ def estimate_instrument_stereo_image(
     global_width: float,
 ) -> dict[str, Any]:
     weights = stereo_frequency_weights(freqs, instrument)
-    left_band = np.sum(left_power * weights[:, None], axis=0)
-    right_band = np.sum(right_power * weights[:, None], axis=0)
+    # Contract directly instead of materializing a full weighted spectrogram
+    # for every instrument and channel.
+    left_band = np.einsum("ij,i->j", left_power, weights, optimize=False)
+    right_band = np.einsum("ij,i->j", right_power, weights, optimize=False)
     band_energy = left_band + right_band + 1e-12
     activity = resize_curve(curve, frame_count)
     activity_weight = np.power(np.clip(activity, 0, 1), 1.35)
@@ -1109,121 +855,6 @@ def analyze_mix(
     }
 
 
-def estimate_true_peak_8x(samples: np.ndarray) -> float:
-    """Estimate 8x inter-sample peak with bounded windowed-sinc polyphase filtering."""
-    data = np.nan_to_num(np.asarray(samples, dtype=np.float32))
-    if data.size == 0:
-        return 1e-9
-    if data.ndim == 1:
-        data = data[:, None]
-    peak = float(np.max(np.abs(data)))
-    tap_count = 24
-    half = tap_count // 2
-    offsets = np.arange(-half + 1, half + 1, dtype=np.float64)
-    window = np.blackman(tap_count).astype(np.float64)
-    kernels = []
-    for fraction in tuple(index / 8 for index in range(1, 8)):
-        kernel = np.sinc(offsets - fraction) * window
-        kernel /= np.sum(kernel)
-        kernels.append(kernel.astype(np.float32))
-
-    chunk_frames = 262_144
-    for channel in range(data.shape[1]):
-        channel_data = data[:, channel]
-        for start in range(0, len(channel_data), chunk_frames):
-            stop = min(len(channel_data), start + chunk_frames)
-            padded_start = max(0, start - half)
-            padded_stop = min(len(channel_data), stop + half)
-            segment = channel_data[padded_start:padded_stop]
-            core_start = start - padded_start
-            core_stop = core_start + (stop - start)
-            for kernel in kernels:
-                interpolated = np.convolve(segment, kernel, mode="same")
-                peak = max(peak, float(np.max(np.abs(interpolated[core_start:core_stop]))))
-    return max(peak, 1e-9)
-
-
-def _k_weighting_coefficients(sample_rate: int) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
-    """Return the BS.1770 K-weighting shelf and RLB high-pass biquads."""
-    rate = float(max(8000, sample_rate))
-
-    shelf_gain_db = 4.0
-    shelf_q = 1 / np.sqrt(2)
-    shelf_k = np.tan(np.pi * 1500.0 / rate)
-    shelf_vh = 10 ** (shelf_gain_db / 20)
-    shelf_vb = shelf_vh ** 0.4996667741545416
-    shelf_a0 = 1 + shelf_k / shelf_q + shelf_k * shelf_k
-    shelf_b = np.asarray([
-        (shelf_vh + shelf_vb * shelf_k / shelf_q + shelf_k * shelf_k) / shelf_a0,
-        2 * (shelf_k * shelf_k - shelf_vh) / shelf_a0,
-        (shelf_vh - shelf_vb * shelf_k / shelf_q + shelf_k * shelf_k) / shelf_a0,
-    ], dtype=np.float64)
-    shelf_a = np.asarray([
-        1,
-        2 * (shelf_k * shelf_k - 1) / shelf_a0,
-        (1 - shelf_k / shelf_q + shelf_k * shelf_k) / shelf_a0,
-    ], dtype=np.float64)
-
-    highpass_q = 0.5
-    highpass_k = np.tan(np.pi * 38.0 / rate)
-    highpass_a0 = 1 + highpass_k / highpass_q + highpass_k * highpass_k
-    highpass_b = np.asarray([
-        1 / highpass_a0,
-        -2 / highpass_a0,
-        1 / highpass_a0,
-    ], dtype=np.float64)
-    highpass_a = np.asarray([
-        1,
-        2 * (highpass_k * highpass_k - 1) / highpass_a0,
-        (1 - highpass_k / highpass_q + highpass_k * highpass_k) / highpass_a0,
-    ], dtype=np.float64)
-    return (shelf_b, shelf_a), (highpass_b, highpass_a)
-
-
-def integrated_loudness_bs1770(samples: np.ndarray, sample_rate: int) -> float:
-    """Measure gated integrated loudness using the ITU-R BS.1770 K-weighting algorithm."""
-    data = np.nan_to_num(np.asarray(samples, dtype=np.float64))
-    if data.size == 0:
-        return -120.0
-    if data.ndim == 1:
-        data = data[:, None]
-    if data.shape[0] < data.shape[1] and data.shape[0] <= 8:
-        data = data.T
-
-    (shelf_b, shelf_a), (highpass_b, highpass_a) = _k_weighting_coefficients(sample_rate)
-    weighted = lfilter(shelf_b, shelf_a, data, axis=0)
-    weighted = lfilter(highpass_b, highpass_a, weighted, axis=0)
-
-    block_frames = max(1, int(round(sample_rate * 0.4)))
-    step_frames = max(1, int(round(block_frames * 0.25)))
-    if len(weighted) < block_frames:
-        weighted = np.pad(weighted, ((0, block_frames - len(weighted)), (0, 0)))
-
-    squared = np.square(weighted, dtype=np.float64)
-    cumulative = np.vstack([np.zeros((1, squared.shape[1])), np.cumsum(squared, axis=0)])
-    starts = np.arange(0, len(weighted) - block_frames + 1, step_frames, dtype=np.int64)
-    if starts.size == 0:
-        starts = np.asarray([0], dtype=np.int64)
-    block_energy = (cumulative[starts + block_frames] - cumulative[starts]) / block_frames
-
-    channel_weights = np.ones(block_energy.shape[1], dtype=np.float64)
-    if channel_weights.size >= 5:
-        channel_weights[3:5] = np.sqrt(2)
-    weighted_energy = block_energy @ channel_weights
-    block_loudness = -0.691 + 10 * np.log10(np.maximum(weighted_energy, 1e-30))
-    absolute_mask = block_loudness >= -70.0
-    if not np.any(absolute_mask):
-        return -120.0
-
-    absolute_energy = float(np.mean(weighted_energy[absolute_mask]))
-    relative_gate = -0.691 + 10 * np.log10(max(absolute_energy, 1e-30)) - 10.0
-    gated_mask = absolute_mask & (block_loudness >= relative_gate)
-    if not np.any(gated_mask):
-        return -120.0
-    integrated_energy = float(np.mean(weighted_energy[gated_mask]))
-    return float(-0.691 + 10 * np.log10(max(integrated_energy, 1e-30)))
-
-
 def build_mix_spectral_balance(power: np.ndarray | None, freqs: np.ndarray | None) -> dict[str, float]:
     if power is None or freqs is None or power.size == 0 or freqs.size == 0:
         return {
@@ -1344,813 +975,6 @@ def build_sections(
     return sections
 
 
-def inspect_demucs(
-    requested: bool,
-    input_path: Path,
-    output_dir: Path,
-    job_id: str,
-    *,
-    cache_key: str | None = None,
-    model: str = "htdemucs_ft",
-    cancel_event: threading.Event | None = None,
-) -> dict[str, Any]:
-    # Demucs stem 분리는 선택 기능이다.
-    # 설치되어 있지 않거나 실패해도 전체 분석 앱이 멈추지 않도록 상태, 사유, 캐시 여부만 payload에 담아 반환한다.
-    allowed_models = {
-        "htdemucs_ft": "Hybrid Transformer Demucs fine-tuned",
-        "htdemucs": "Hybrid Transformer Demucs",
-    }
-    model_name = model if model in allowed_models else "htdemucs_ft"
-    module_found = importlib.util.find_spec("demucs") is not None
-    command_found = shutil.which("demucs") is not None
-    available = module_found or command_found
-    device = detect_demucs_device()
-    settings = {
-        "profile": DEMUCS_QUALITY_PROFILE,
-        "postprocess": DEMUCS_POSTPROCESS_VERSION,
-        "device": device,
-        "shifts": DEMUCS_SHIFTS,
-        "overlap": round(DEMUCS_OVERLAP, 3),
-        "segment": DEMUCS_SEGMENT_SECONDS,
-        "jobs": DEMUCS_JOBS,
-        "intermediateFormat": "pcm24",
-    }
-    payload: dict[str, Any] = {
-        "name": f"Demucs / {allowed_models[model_name]} + adaptive 6-stem",
-        "model": model_name,
-        "auxiliaryModel": DEMUCS_AUXILIARY_MODEL,
-        "qualityProfile": DEMUCS_QUALITY_PROFILE,
-        "postprocess": DEMUCS_POSTPROCESS_VERSION,
-        "settings": settings,
-        "available": available,
-        "requested": requested,
-        "status": "ready" if available else "not-installed",
-        "cached": False,
-        "stems": [],
-        "stemQuality": {},
-        "hybridStemProfile": {"accepted": [], "rejected": [], "candidates": {}},
-    }
-    if not requested:
-        return payload
-    raise_if_cancelled(cancel_event)
-
-    cache_id = build_demucs_cache_id(cache_key, model_name)
-    cache_root = output_dir / "_cache" / "demucs"
-    stem_root = cache_root / cache_id if cache_id else output_dir / job_id / "demucs"
-    maybe_prune_demucs_cache(cache_root, keep=stem_root if cache_id else None)
-    final_root = stem_root / "final"
-    cached_stems = collect_demucs_stem_paths(final_root)
-    cached_ids = {get_stem_id_from_path(path) for path in cached_stems}
-    if DEMUCS_CORE_STEM_IDS.issubset(cached_ids) and cached_demucs_stems_match_source(
-        cached_stems,
-        input_path,
-    ):
-        touch_cache_entry(stem_root)
-        payload["status"] = "completed"
-        payload["cached"] = True
-        payload["stems"] = [str(path.relative_to(output_dir)).replace("\\", "/") for path in cached_stems]
-        payload["stemQuality"] = read_stem_quality(final_root)
-        payload["hybridStemProfile"] = read_hybrid_stem_profile(final_root)
-        return payload
-    if cached_stems:
-        # 불완전하거나 다른 곡에서 남은 캐시는 재생 단계로 넘기지 않고 다시 생성한다.
-        LOGGER.warning("Discarding invalid Demucs cache entry: %s", stem_root)
-        shutil.rmtree(stem_root, ignore_errors=True)
-    if not available:
-        return payload
-
-    stem_root.mkdir(parents=True, exist_ok=True)
-    primary_root = stem_root / "primary"
-    auxiliary_root = stem_root / "adaptive6"
-    separation_started = time.perf_counter()
-    try:
-        primary_started = time.perf_counter()
-        run_demucs_model(
-            input_path,
-            primary_root,
-            model_name,
-            device,
-            cancel_event=cancel_event,
-        )
-        primary_seconds = time.perf_counter() - primary_started
-        raise_if_cancelled(cancel_event)
-        primary_stems = collect_demucs_stem_paths(primary_root)
-        primary_ids = {get_stem_id_from_path(path) for path in primary_stems}
-        if not DEMUCS_CORE_STEM_IDS.issubset(primary_ids):
-            raise RuntimeError("The primary Demucs model returned an incomplete core stem set.")
-
-        auxiliary_stems: list[Path] = []
-        auxiliary_reason = ""
-        auxiliary_started = time.perf_counter()
-        try:
-            run_demucs_model(
-                input_path,
-                auxiliary_root,
-                DEMUCS_AUXILIARY_MODEL,
-                device,
-                cancel_event=cancel_event,
-            )
-            auxiliary_stems = collect_demucs_stem_paths(auxiliary_root)
-        except AnalysisCancelledError:
-            raise
-        except Exception as exc:
-            auxiliary_reason = str(exc).strip()[-400:]
-            LOGGER.warning("Adaptive 6-stem pass failed; keeping the core set: %s", auxiliary_reason)
-        auxiliary_seconds = time.perf_counter() - auxiliary_started
-
-        postprocess_started = time.perf_counter()
-        stems, hybrid_profile = build_adaptive_hybrid_stems(
-            primary_stems,
-            auxiliary_stems,
-            final_root,
-        )
-        if auxiliary_reason:
-            hybrid_profile["fallbackReason"] = auxiliary_reason
-        stem_quality = enhance_demucs_stems(stems, final_root)
-        for stem_id, candidate in hybrid_profile.get("candidates", {}).items():
-            if stem_id in stem_quality:
-                stem_quality[stem_id].update({
-                    "hybridConfidence": candidate.get("confidence", 0),
-                    "sourceModel": DEMUCS_AUXILIARY_MODEL,
-                    "adaptivelyAccepted": True,
-                })
-        write_stem_quality(final_root, stem_quality)
-        write_hybrid_stem_profile(final_root, hybrid_profile)
-        postprocess_seconds = time.perf_counter() - postprocess_started
-        # 최종 Stem과 품질 메타데이터만 캐시해 이중 모델의 임시 출력을 남기지 않는다.
-        shutil.rmtree(primary_root, ignore_errors=True)
-        shutil.rmtree(auxiliary_root, ignore_errors=True)
-        raise_if_cancelled(cancel_event)
-        payload["status"] = "completed"
-        payload["cached"] = False
-        payload["stems"] = [str(path.relative_to(output_dir)).replace("\\", "/") for path in stems]
-        payload["stemQuality"] = stem_quality
-        payload["hybridStemProfile"] = hybrid_profile
-        payload["timing"] = {
-            "primarySeconds": round(primary_seconds, 2),
-            "auxiliarySeconds": round(auxiliary_seconds, 2),
-            "postprocessSeconds": round(postprocess_seconds, 2),
-            "totalSeconds": round(time.perf_counter() - separation_started, 2),
-        }
-        if cache_id:
-            touch_cache_entry(stem_root)
-            maybe_prune_demucs_cache(cache_root, keep=stem_root, force=True)
-    except AnalysisCancelledError:
-        shutil.rmtree(stem_root, ignore_errors=True)
-        raise
-    except subprocess.CalledProcessError as exc:  # Demucs failures should not break the analysis app.
-        payload["status"] = "failed"
-        LOGGER.warning(
-            "Demucs process failed for job_id=%s returncode=%s stderr=%s",
-            job_id,
-            exc.returncode,
-            (exc.stderr or "").strip()[-1200:],
-        )
-        payload["reason"] = "Demucs stem 분리를 완료하지 못해 full-mix fallback으로 전환했습니다."
-    except Exception:  # Demucs 실패가 분석 화면 전체를 중단시키지 않도록 원본 기반 결과로 복구한다.
-        payload["status"] = "failed"
-        LOGGER.exception("Demucs execution failed for job_id=%s", job_id)
-        payload["reason"] = "Demucs stem 분리를 완료하지 못해 full-mix fallback으로 전환했습니다."
-    return payload
-
-
-def build_demucs_cache_id(cache_key: str | None, model_name: str) -> str:
-    """곡 식별자가 잘리지 않는 충돌 방지형 Demucs 캐시 키를 만든다."""
-    if not cache_key:
-        return ""
-    identity = json.dumps([
-        DEMUCS_CACHE_LAYOUT_VERSION, cache_key, model_name, DEMUCS_QUALITY_PROFILE,
-        DEMUCS_POSTPROCESS_VERSION, DEMUCS_AUXILIARY_MODEL,
-        DEMUCS_SHIFTS, DEMUCS_OVERLAP, DEMUCS_SEGMENT_SECONDS,
-    ], ensure_ascii=True, separators=(",", ":"))
-    return f"{DEMUCS_CACHE_LAYOUT_VERSION}_{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
-
-
-def cached_demucs_stems_match_source(stem_paths: list[Path], input_path: Path) -> bool:
-    """캐시 Stem의 기본 포맷과 길이가 현재 원본에 맞는지 빠르게 검증한다."""
-    try:
-        source = sf.info(str(input_path))
-        if source.frames <= 0 or source.samplerate <= 0:
-            return False
-        duration_tolerance = max(0.08, source.duration * 0.002)
-        stem_sample_rate: int | None = None
-        for path in stem_paths:
-            info = sf.info(str(path))
-            if not 1 <= info.channels <= 2 or not 8_000 <= info.samplerate <= 192_000:
-                return False
-            if stem_sample_rate is None:
-                stem_sample_rate = info.samplerate
-            elif info.samplerate != stem_sample_rate:
-                return False
-            if info.frames <= 0 or abs(info.duration - source.duration) > duration_tolerance:
-                return False
-    except (OSError, RuntimeError, ValueError):
-        return False
-    return True
-
-
-def run_cancellable_command(
-    command: list[str],
-    *,
-    cancel_event: threading.Event | None,
-    timeout_seconds: float,
-) -> subprocess.CompletedProcess[str]:
-    """Run a subprocess while honoring cancellation without leaving a GPU worker behind."""
-    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        creationflags=creation_flags,
-        start_new_session=os.name != "nt",
-    )
-    started_at = time.monotonic()
-    stdout = ""
-    stderr = ""
-    try:
-        while True:
-            try:
-                stdout, stderr = process.communicate(timeout=0.25)
-                break
-            except subprocess.TimeoutExpired:
-                if cancel_event is not None and cancel_event.is_set():
-                    terminate_process(process)
-                    raise AnalysisCancelledError("Subprocess analysis was cancelled")
-                if time.monotonic() - started_at >= timeout_seconds:
-                    terminate_process(process)
-                    raise subprocess.TimeoutExpired(command, timeout_seconds)
-        if process.returncode:
-            raise subprocess.CalledProcessError(process.returncode, command, output=stdout, stderr=stderr)
-        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-    finally:
-        if process.poll() is None:
-            terminate_process(process)
-
-
-def terminate_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                check=False,
-                capture_output=True,
-                timeout=5,
-            )
-        else:
-            os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=4)
-        return
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    try:
-        if os.name != "nt":
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
-            process.kill()
-        process.wait(timeout=2)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
-def run_demucs_model(
-    input_path: Path,
-    output_root: Path,
-    model_name: str,
-    device: str,
-    *,
-    cancel_event: threading.Event | None,
-) -> None:
-    command = [
-        sys.executable,
-        "-m",
-        "demucs.separate",
-        "-n",
-        model_name,
-        "--device",
-        device,
-        "--shifts",
-        str(DEMUCS_SHIFTS),
-        "--overlap",
-        f"{DEMUCS_OVERLAP:.3f}",
-        "--segment",
-        str(DEMUCS_SEGMENT_SECONDS),
-        "-j",
-        str(DEMUCS_JOBS),
-        # 최종 출력도 PCM 24-bit이므로, 대용량 중간 float WAV를 만들 필요가 없다.
-        "--int24",
-        "--clip-mode",
-        "rescale",
-        "--out",
-        str(output_root),
-        str(input_path),
-    ]
-    run_cancellable_command(command, cancel_event=cancel_event, timeout_seconds=900)
-
-
-def collect_demucs_stem_paths(root: Path) -> list[Path]:
-    by_id: dict[str, Path] = {}
-    if not root.exists():
-        return []
-    for path in sorted(root.rglob("*.wav")):
-        stem_id = get_stem_id_from_path(path)
-        if stem_id in DEMUCS_STEM_IDS and stem_id not in by_id:
-            by_id[stem_id] = path
-    order = ["vocals", "guitar", "piano", "other", "drums", "bass"]
-    return [by_id[stem_id] for stem_id in order if stem_id in by_id]
-
-
-def _read_stem_audio(path: Path) -> tuple[np.ndarray, int]:
-    data, sample_rate = sf.read(str(path), always_2d=True, dtype="float32")
-    data = np.nan_to_num(data.astype(np.float32, copy=False))
-    if data.size == 0:
-        raise ValueError(f"Empty stem: {path.name}")
-    return data, int(sample_rate)
-
-
-def _decimated_mono(data: np.ndarray, limit: int = 180_000) -> np.ndarray:
-    mono = np.mean(data, axis=1, dtype=np.float32)
-    stride = max(1, int(np.ceil(len(mono) / max(1, limit))))
-    return mono[::stride].astype(np.float64, copy=False)
-
-
-def _normalized_correlation(left: np.ndarray, right: np.ndarray) -> float:
-    length = min(len(left), len(right))
-    if length <= 8:
-        return 0.0
-    x = left[:length]
-    y = right[:length]
-    denominator = float(np.sqrt(np.dot(x, x) * np.dot(y, y)) + 1e-18)
-    return float(np.clip(np.dot(x, y) / denominator, -1, 1))
-
-
-def evaluate_adaptive_stem_candidate(
-    stem_id: str,
-    candidate: np.ndarray,
-    primary_other: np.ndarray,
-    core_stems: dict[str, np.ndarray],
-) -> tuple[dict[str, Any], np.ndarray]:
-    candidate_mono = _decimated_mono(candidate)
-    other_mono = _decimated_mono(primary_other)
-    length = min(len(candidate_mono), len(other_mono))
-    candidate_mono = candidate_mono[:length]
-    other_mono = other_mono[:length]
-    candidate_power = float(np.dot(candidate_mono, candidate_mono)) + 1e-18
-    raw_projection = float(np.dot(other_mono, candidate_mono) / candidate_power)
-    projection = float(np.clip(raw_projection, 0, 1.25))
-    scaled = candidate * np.float32(projection)
-    other_rms = rms_float(primary_other)
-    candidate_rms = rms_float(scaled)
-    ratio_db = linear_to_db(candidate_rms / (other_rms + 1e-9))
-
-    scaled_mono = candidate_mono * projection
-    remaining = other_mono - scaled_mono
-    explained = float(np.clip(
-        1 - (np.dot(remaining, remaining) / (np.dot(other_mono, other_mono) + 1e-18)),
-        0,
-        1,
-    ))
-    leakage = 0.0
-    for core in core_stems.values():
-        leakage = max(leakage, abs(_normalized_correlation(candidate_mono, _decimated_mono(core))))
-
-    projection_score = float(np.clip(1 - abs(raw_projection - 1) / 0.8, 0, 1))
-    energy_score = float(
-        np.clip((ratio_db + 34) / 18, 0, 1) * np.clip((-1 - ratio_db) / 6, 0, 1)
-    )
-    isolation_score = 1 - leakage
-    explained_score = float(np.clip(explained / 0.18, 0, 1))
-    confidence = float(np.clip(
-        projection_score * 0.32
-        + isolation_score * 0.28
-        + energy_score * 0.24
-        + explained_score * 0.16,
-        0,
-        1,
-    ))
-    threshold = 0.62 if stem_id == "piano" else 0.54
-    accepted = bool(
-        0.35 <= raw_projection <= 1.25
-        and -34 <= ratio_db <= -1.5
-        and leakage < 0.72
-        and explained > 0.002
-        and confidence >= threshold
-    )
-    metrics = {
-        "accepted": accepted,
-        "confidence": round(confidence, 4),
-        "threshold": threshold,
-        "projection": round(projection, 4),
-        "energyRatioDb": round(ratio_db, 2),
-        "coreLeakage": round(leakage, 4),
-        "explainedEnergy": round(explained, 4),
-    }
-    return metrics, scaled
-
-
-def build_adaptive_hybrid_stems(
-    primary_paths: list[Path],
-    auxiliary_paths: list[Path],
-    final_root: Path,
-) -> tuple[list[Path], dict[str, Any]]:
-    primary_by_id = {get_stem_id_from_path(path): path for path in primary_paths}
-    if not DEMUCS_CORE_STEM_IDS.issubset(primary_by_id):
-        raise ValueError("Primary Demucs stems are incomplete")
-
-    if final_root.exists():
-        shutil.rmtree(final_root)
-    final_root.mkdir(parents=True, exist_ok=True)
-    primary_audio = {stem_id: _read_stem_audio(primary_by_id[stem_id]) for stem_id in DEMUCS_CORE_STEM_IDS}
-    sample_rates = {sample_rate for _, sample_rate in primary_audio.values()}
-    shapes = {data.shape for data, _ in primary_audio.values()}
-    if len(sample_rates) != 1 or len(shapes) != 1:
-        raise ValueError("Primary Demucs stems do not share one sample grid")
-    sample_rate = next(iter(sample_rates))
-    primary_other = primary_audio["other"][0]
-    core_for_leakage = {
-        stem_id: primary_audio[stem_id][0]
-        for stem_id in ("vocals", "drums", "bass")
-    }
-
-    auxiliary_by_id = {get_stem_id_from_path(path): path for path in auxiliary_paths}
-    profile: dict[str, Any] = {
-        "mode": "adaptive-4-plus-6",
-        "primaryModel": "quality-core",
-        "auxiliaryModel": DEMUCS_AUXILIARY_MODEL,
-        "accepted": [],
-        "rejected": [],
-        "candidates": {},
-    }
-    accepted_audio: dict[str, np.ndarray] = {}
-    for stem_id in ("guitar", "piano"):
-        path = auxiliary_by_id.get(stem_id)
-        if path is None:
-            profile["rejected"].append(stem_id)
-            profile["candidates"][stem_id] = {"accepted": False, "reason": "missing"}
-            continue
-        try:
-            candidate, candidate_sr = _read_stem_audio(path)
-        except Exception:
-            profile["rejected"].append(stem_id)
-            profile["candidates"][stem_id] = {"accepted": False, "reason": "decode-failed"}
-            continue
-        if candidate_sr != sample_rate or candidate.shape != primary_other.shape:
-            profile["rejected"].append(stem_id)
-            profile["candidates"][stem_id] = {"accepted": False, "reason": "sample-grid-mismatch"}
-            continue
-        metrics, scaled = evaluate_adaptive_stem_candidate(
-            stem_id,
-            candidate,
-            primary_other,
-            core_for_leakage,
-        )
-        if metrics["accepted"] and accepted_audio:
-            cross_leakage = max(
-                abs(_normalized_correlation(_decimated_mono(scaled), _decimated_mono(existing)))
-                for existing in accepted_audio.values()
-            )
-            metrics["crossCandidateLeakage"] = round(cross_leakage, 4)
-            if cross_leakage >= 0.72:
-                metrics["accepted"] = False
-                metrics["reason"] = "candidate-overlap"
-        profile["candidates"][stem_id] = metrics
-        if metrics["accepted"]:
-            accepted_audio[stem_id] = scaled
-            profile["accepted"].append(stem_id)
-        else:
-            profile["rejected"].append(stem_id)
-
-    remaining_other = primary_other.copy()
-    for data in accepted_audio.values():
-        remaining_other -= data
-
-    final_audio = {
-        "vocals": primary_audio["vocals"][0],
-        **accepted_audio,
-        "other": remaining_other,
-        "drums": primary_audio["drums"][0],
-        "bass": primary_audio["bass"][0],
-    }
-    for stem_id, data in final_audio.items():
-        sf.write(str(final_root / f"{stem_id}.wav"), data, sample_rate, subtype="PCM_24")
-    return collect_demucs_stem_paths(final_root), profile
-
-
-def read_hybrid_stem_profile(stem_root: Path) -> dict[str, Any]:
-    path = stem_root / "hybrid_stem_profile.json"
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"accepted": [], "rejected": [], "candidates": {}}
-    return payload if isinstance(payload, dict) else {"accepted": [], "rejected": [], "candidates": {}}
-
-
-def write_hybrid_stem_profile(stem_root: Path, profile: dict[str, Any]) -> None:
-    try:
-        (stem_root / "hybrid_stem_profile.json").write_text(
-            json.dumps(profile, ensure_ascii=True, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
-
-@lru_cache(maxsize=1)
-def detect_demucs_device() -> str:
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
-
-
-def read_stem_quality(stem_root: Path) -> dict[str, Any]:
-    quality_path = stem_root / "stem_quality.json"
-    if not quality_path.exists():
-        return {}
-    try:
-        payload = json.loads(quality_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in payload.items()
-        if key in DEMUCS_STEM_IDS and isinstance(value, dict)
-    }
-
-
-def write_stem_quality(stem_root: Path, quality: dict[str, Any]) -> None:
-    try:
-        (stem_root / "stem_quality.json").write_text(
-            json.dumps(quality, ensure_ascii=True, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
-
-def enhance_demucs_stems(stem_paths: list[Path], stem_root: Path) -> dict[str, Any]:
-    loaded: list[dict[str, Any]] = []
-    for path in stem_paths:
-        stem_id = get_stem_id_from_path(path)
-        if stem_id not in DEMUCS_STEM_IDS:
-            continue
-        try:
-            data, sample_rate = sf.read(str(path), always_2d=True, dtype="float32")
-        except Exception:
-            continue
-        if data.size == 0:
-            continue
-        loaded.append({
-            "id": stem_id,
-            "path": path,
-            "data": np.nan_to_num(data.astype(np.float32, copy=False)),
-            "sample_rate": int(sample_rate),
-        })
-
-    loaded_ids = {item["id"] for item in loaded}
-    if not DEMUCS_CORE_STEM_IDS.issubset(loaded_ids):
-        return {}
-
-    reference_sr = loaded[0]["sample_rate"]
-    if any(item["sample_rate"] != reference_sr for item in loaded):
-        return {}
-
-    frame_size = int(np.clip(round(reference_sr * 0.046), 1024, 4096))
-    hop = max(256, frame_size // 2)
-    curves = []
-    for item in loaded:
-        mono = np.mean(item["data"], axis=1)
-        curves.append(stem_frame_rms(mono, frame_size, hop))
-    common_frames = min((len(curve) for curve in curves), default=0)
-    if common_frames <= 1:
-        return {}
-
-    matrix = np.vstack([curve[:common_frames] for curve in curves]).astype(np.float32)
-    max_curve = np.max(matrix, axis=0) + 1e-8
-    total_curve = np.sum(matrix, axis=0) + 1e-8
-    quality: dict[str, Any] = {}
-
-    for index, item in enumerate(loaded):
-        stem_id = item["id"]
-        data = item["data"]
-        curve = matrix[index]
-        before_rms = rms_float(data)
-        dominance = np.clip(curve / max_curve, 0, 1)
-        share = np.clip(curve / total_curve, 0, 1)
-        activity_ref = float(np.percentile(curve, 92) + 1e-8)
-        activity = np.clip(curve / activity_ref, 0, 1.4)
-        floor = STEM_MASK_FLOORS.get(stem_id, 0.2)
-        clarity = (
-            np.clip((dominance - 0.18) / 0.76, 0, 1) * 0.72
-            + np.clip((share - 0.08) / 0.5, 0, 1) * 0.28
-        )
-        activity_gate = 0.48 + 0.52 * np.clip(activity * 1.18, 0, 1)
-        target_mask = np.clip((floor + (1.0 - floor) * clarity) * activity_gate, 0.06, 1.0)
-        smooth_mask = smooth_envelope(target_mask, attack=0.34, release=0.18)
-        sample_mask = resample_mask(smooth_mask, len(data), hop)
-        enhanced = data * sample_mask[:, None]
-        enhanced = remove_dc_and_apply_fade(enhanced, reference_sr)
-        peak = float(np.max(np.abs(enhanced)) + 1e-9)
-        if peak > 0.995:
-            enhanced *= np.float32(0.995 / peak)
-        try:
-            sf.write(str(item["path"]), enhanced, reference_sr, subtype="PCM_24")
-        except Exception:
-            enhanced = data
-
-        after_rms = rms_float(enhanced)
-        mask_mean = float(np.mean(smooth_mask))
-        dominance_mean = float(np.mean(dominance))
-        retention = float(after_rms / (before_rms + 1e-9))
-        separation = float(np.clip(mask_mean * 0.56 + dominance_mean * 0.44, 0, 1))
-        spatial_weight = float(np.clip(0.72 + separation * 0.34 + min(0.2, retention) * 0.1, 0.62, 1.08))
-        quality[stem_id] = {
-            "rmsDb": round(linear_to_db(after_rms), 2),
-            "peakDb": round(linear_to_db(float(np.max(np.abs(enhanced)) + 1e-9)), 2),
-            "activity": round(float(np.mean(activity > 0.08)), 4),
-            "dominance": round(dominance_mean, 4),
-            "separation": round(separation, 4),
-            "retention": round(float(np.clip(retention, 0, 1.5)), 4),
-            "spatialWeight": round(spatial_weight, 4),
-        }
-
-    write_stem_quality(stem_root, quality)
-    return quality
-
-
-def get_stem_id_from_path(path: Path) -> str:
-    return path.stem.lower()
-
-
-def stem_frame_rms(samples: np.ndarray, frame_size: int, hop: int) -> np.ndarray:
-    samples = np.asarray(samples, dtype=np.float32)
-    if samples.size == 0:
-        return np.zeros(1, dtype=np.float32)
-    padded = np.pad(samples, (frame_size // 2, frame_size // 2), mode="constant")
-    frame_count = max(1, 1 + (len(padded) - frame_size) // hop)
-    values = np.zeros(frame_count, dtype=np.float32)
-    for index in range(frame_count):
-        frame = padded[index * hop : index * hop + frame_size]
-        values[index] = float(np.sqrt(np.mean(frame * frame) + 1e-12))
-    return values
-
-
-def smooth_envelope(values: np.ndarray, *, attack: float, release: float) -> np.ndarray:
-    values = np.asarray(values, dtype=np.float32)
-    if values.size == 0:
-        return values
-    output = np.zeros_like(values)
-    output[0] = values[0]
-    for index in range(1, len(values)):
-        coeff = attack if values[index] >= output[index - 1] else release
-        output[index] = output[index - 1] * (1.0 - coeff) + values[index] * coeff
-    return np.clip(output, 0, 1)
-
-
-def resample_mask(mask: np.ndarray, sample_count: int, hop: int) -> np.ndarray:
-    if sample_count <= 0:
-        return np.zeros(0, dtype=np.float32)
-    if mask.size <= 1:
-        value = float(mask[0]) if mask.size else 1.0
-        return np.full(sample_count, value, dtype=np.float32)
-    x_old = np.arange(mask.size, dtype=np.float32) * hop
-    x_new = np.arange(sample_count, dtype=np.float32)
-    return np.interp(x_new, x_old, mask, left=mask[0], right=mask[-1]).astype(np.float32)
-
-
-def remove_dc_and_apply_fade(data: np.ndarray, sample_rate: int) -> np.ndarray:
-    output = np.asarray(data, dtype=np.float32).copy()
-    if output.size == 0:
-        return output
-    output -= np.mean(output, axis=0, keepdims=True)
-    fade_len = min(max(2, int(sample_rate * 0.006)), len(output), 2048)
-    if fade_len > 1:
-        fade = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
-        output[:fade_len] *= fade[:, None]
-        output[-fade_len:] *= fade[::-1, None]
-    return np.nan_to_num(output)
-
-
-def rms_float(data: np.ndarray) -> float:
-    data = np.asarray(data, dtype=np.float32)
-    if data.size == 0:
-        return 0.0
-    return float(np.sqrt(np.mean(data * data) + 1e-12))
-
-
-def linear_to_db(value: float) -> float:
-    return float(20.0 * math.log10(max(value, 1e-9)))
-
-
-def touch_cache_entry(path: Path) -> None:
-    # LRU 기준은 캐시 루트의 mtime 하나면 충분하다. 대형 Stem 트리를 순회하지 않는다.
-    try:
-        path.touch(exist_ok=True)
-    except OSError:
-        pass
-
-
-def maybe_prune_demucs_cache(
-    cache_root: Path,
-    keep: Path | None = None,
-    *,
-    force: bool = False,
-) -> None:
-    """요청마다 대형 캐시를 다시 스캔하지 않도록 정리 작업을 제한한다."""
-    global _demucs_cache_last_prune
-    now = time.monotonic()
-    with _DEMUCS_CACHE_PRUNE_LOCK:
-        if not force and now - _demucs_cache_last_prune < DEMUCS_CACHE_PRUNE_INTERVAL_SECONDS:
-            return
-        _demucs_cache_last_prune = now
-    prune_demucs_cache(cache_root, keep=keep)
-
-
-def prune_demucs_cache(cache_root: Path, keep: Path | None = None) -> None:
-    if not cache_root.exists():
-        return
-    try:
-        root = cache_root.resolve()
-    except Exception:
-        return
-    keep_resolved = None
-    if keep is not None:
-        try:
-            keep_resolved = keep.resolve()
-        except Exception:
-            keep_resolved = None
-
-    entries: list[tuple[Path, int, float]] = []
-    now = time.time()
-    max_age = DEMUCS_CACHE_MAX_AGE_DAYS * 24 * 60 * 60
-    for entry in cache_root.iterdir():
-        if not entry.is_dir():
-            continue
-        try:
-            resolved = entry.resolve()
-        except Exception:
-            continue
-        if keep_resolved is not None and resolved == keep_resolved:
-            continue
-        if not is_relative_to(resolved, root):
-            continue
-        size, last_used = cache_entry_stats(entry)
-        entries.append((entry, size, last_used))
-
-    for entry, _size, last_used in entries:
-        if now - last_used > max_age:
-            safe_remove_cache_entry(entry, root)
-    entries = [item for item in entries if item[0].exists()]
-    total = sum(size for _entry, size, _last in entries)
-    for entry, size, _last_used in sorted(entries, key=lambda item: item[2]):
-        if total <= DEMUCS_CACHE_MAX_BYTES:
-            break
-        safe_remove_cache_entry(entry, root)
-        total -= size
-
-
-def cache_entry_stats(path: Path) -> tuple[int, float]:
-    size = 0
-    last_used = 0.0
-    for item in path.rglob("*"):
-        try:
-            stat = item.stat()
-        except OSError:
-            continue
-        if item.is_file():
-            size += stat.st_size
-        last_used = max(last_used, stat.st_mtime)
-    try:
-        last_used = max(last_used, path.stat().st_mtime)
-    except OSError:
-        pass
-    return size, last_used
-
-
-def safe_remove_cache_entry(path: Path, root: Path) -> None:
-    try:
-        resolved = path.resolve()
-    except Exception:
-        return
-    if resolved == root or not is_relative_to(resolved, root):
-        return
-    shutil.rmtree(resolved, ignore_errors=True)
-
-
-def is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
 def build_clean_recommendations(
     active_ids: list[str],
     mix: dict[str, Any],
@@ -2181,50 +1005,3 @@ def make_waveform_preview(samples: np.ndarray, points: int) -> list[float]:
     view = usable.reshape(points, frame)
     peaks = np.max(np.abs(view), axis=1)
     return compress_series(normalize_curve(peaks).tolist(), 4)
-
-
-def resize_curve(curve: np.ndarray, length: int) -> np.ndarray:
-    curve = np.asarray(curve, dtype=np.float32)
-    if len(curve) == length:
-        return curve
-    if len(curve) == 0:
-        return np.zeros(length, dtype=np.float32)
-    x_old = np.linspace(0, 1, len(curve))
-    x_new = np.linspace(0, 1, length)
-    return np.interp(x_new, x_old, curve).astype(np.float32)
-
-
-def normalize_curve(curve: np.ndarray | list[float]) -> np.ndarray:
-    arr = np.asarray(curve, dtype=np.float32)
-    if arr.size == 0:
-        return arr
-    arr = np.nan_to_num(np.maximum(arr, 0))
-    peak = float(np.percentile(arr, 97) + 1e-9)
-    return np.clip(arr / peak, 0, 1).astype(np.float32)
-
-
-def clamp_curve(curve: np.ndarray) -> np.ndarray:
-    return np.clip(np.nan_to_num(curve), 0, 1).astype(np.float32)
-
-
-def compress_series(values: list[float], digits: int = 4) -> list[float]:
-    return [round(float(value), digits) for value in values]
-
-
-def estimate_tempo_confidence(onset_env: np.ndarray) -> float:
-    onset = normalize_curve(onset_env)
-    if onset.size < 4:
-        return 0.0
-    return round(clamp01(float(np.std(onset) * 1.6 + np.mean(onset > 0.52) * 0.45)), 3)
-
-
-def db(value: float) -> float:
-    return 20.0 * math.log10(max(float(value), 1e-12))
-
-
-def clamp01(value: float) -> float:
-    return max(0.0, min(1.0, float(value)))
-
-
-def clamp_value(value: float, min_value: float, max_value: float) -> float:
-    return max(min_value, min(max_value, float(value)))

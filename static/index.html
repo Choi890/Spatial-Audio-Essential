@@ -7,7 +7,7 @@
   <meta name="description" content="Demucs stem과 mixture residual로 직접음을 재구성하는 binaural 공간음향 스튜디오" />
   <title>Spatial Audio Essential</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="styles.css?v=1.18.0" />
+  <link rel="stylesheet" href="styles.css?v=2.0.7-refresh" />
 </head>
 
 <body>
@@ -89,16 +89,7 @@
             </div>
           </div>
         </div>
-        <div class="spatial-engine-module" aria-label="Spatial engine controls">
-          <div class="spatial-renderer-controls">
-            <div class="playback-device-control" id="playback-device-control">
-              <label for="playback-device-select">
-                <span>PLAYBACK DEVICE</span>
-                <select id="playback-device-select" aria-label="재생 기기"></select>
-              </label>
-            </div>
-          </div>
-        </div>
+
 
       </section>
     </section>
@@ -183,12 +174,16 @@
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="js/config.js?v=1.18.0"></script>
+  <script src="js/config.js?v=1.20.3-simplified"></script>
   <script src="js/utils.js?v=1.18.0"></script>
-  <script src="js/device-profiles.js?v=1.18.0"></script>
-  <script src="js/runtime-quality.js?v=1.18.0"></script>
-  <script src="js/spatial-quality.js?v=1.18.0"></script>
-  <script src="app.js?v=1.18.0"></script>
+  <script src="js/runtime-quality.js?v=1.18.2-monitor"></script>
+  <script src="js/spatial-quality.js?v=1.20.4-silence"></script>
+  <script src="js/binaural-scene.js?v=1.20.1-tone-cache"></script>
+  <script src="js/spatial-renderer.js?v=2.0.21-front-field"></script>
+  <script src="js/task-scope.js?v=2.0.1"></script>
+  <script src="js/transport.js?v=2.0.4-cleanup"></script>
+  <script src="js/studio-view.js?v=2.0.1-refresh"></script>
+  <script src="app.js?v=2.0.32-alignment-yield"></script>
 </body>
 
 </html>

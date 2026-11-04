@@ -11,25 +11,9 @@ from unittest.mock import patch
 import numpy as np
 import soundfile as sf
 
-from backend.audio_engine import (
-    AudioChannelLayoutError,
-    DEMUCS_SHIFTS,
-    analyze_audio,
-    analyze_audio_optimized,
-    build_adaptive_hybrid_stems,
-    build_demucs_cache_id,
-    cached_demucs_stems_match_source,
-    enhance_demucs_stems,
-    estimate_true_peak_8x,
-    integrated_loudness_bs1770,
-    load_audio,
-    measure_master_output,
-    read_stem_quality,
-    resample_linear,
-    run_cancellable_command,
-    run_demucs_model,
-    AnalysisCancelledError,
-)
+from backend.audio_io import AudioChannelLayoutError, estimate_true_peak_8x, integrated_loudness_bs1770, load_audio, measure_master_output
+from backend.separation import DEMUCS_SHIFTS, DEMUCS_QUALITY_PROFILE, build_adaptive_hybrid_stems, build_demucs_cache_id, cached_demucs_stems_match_source, enhance_demucs_stems, read_stem_quality, run_cancellable_command, run_demucs_model, AnalysisCancelledError
+from backend.audio_engine import analyze_audio, analyze_audio_optimized, resample_linear
 
 
 class AudioEngineRegressionTests(unittest.TestCase):
@@ -59,7 +43,7 @@ class AudioEngineRegressionTests(unittest.TestCase):
         self.assertEqual(result["analysisExecution"], "parallel-cpu-features-cuda-demucs")
 
     def test_demucs_uses_single_shift_and_pcm24_intermediates(self) -> None:
-        with patch("backend.audio_engine.run_cancellable_command") as runner:
+        with patch("backend.separation.run_cancellable_command") as runner:
             run_demucs_model(
                 Path("song.flac"),
                 Path("outputs"),
@@ -71,6 +55,15 @@ class AudioEngineRegressionTests(unittest.TestCase):
         self.assertEqual(command[command.index("--shifts") + 1], str(DEMUCS_SHIFTS))
         self.assertIn("--int24", command)
         self.assertNotIn("--float32", command)
+        self.assertIn("backend.demucs_worker", command)
+        self.assertIn("--batch-size", command)
+
+    def test_cpu_separator_keeps_upstream_runner(self) -> None:
+        with patch("backend.separation.run_cancellable_command") as runner:
+            run_demucs_model(Path("song.wav"), Path("outputs"), "htdemucs_ft", "cpu", cancel_event=None)
+        command = runner.call_args.args[0]
+        self.assertIn("demucs.separate", command)
+        self.assertNotIn("--batch-size", command)
 
     def test_demucs_cache_id_keeps_each_song_isolated(self) -> None:
         first = build_demucs_cache_id("a" * 64, "htdemucs_ft")
@@ -78,7 +71,7 @@ class AudioEngineRegressionTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertEqual(first, build_demucs_cache_id("a" * 64, "htdemucs_ft"))
         self.assertNotEqual(first, build_demucs_cache_id("a" * 64, "htdemucs_6s"))
-        with patch("backend.audio_engine.DEMUCS_OVERLAP", 0.3601):
+        with patch("backend.separation.DEMUCS_OVERLAP", 0.3601):
             self.assertNotEqual(first, build_demucs_cache_id("a" * 64, "htdemucs_ft"))
         self.assertNotEqual(build_demucs_cache_id("song-x", "model"),
                             build_demucs_cache_id("song-y", "model"))
@@ -183,6 +176,32 @@ class AudioEngineRegressionTests(unittest.TestCase):
         gated_measured = integrated_loudness_bs1770(gated, sample_rate)
         self.assertAlmostEqual(gated_measured, measured, delta=0.7)
 
+    def test_bs1770_chunked_energy_matches_direct_block_reference(self) -> None:
+        from scipy.signal import lfilter
+        from backend.audio_io import _k_weighting_coefficients
+
+        rng = np.random.default_rng(73)
+        for sample_rate in (44100, 48000, 96000):
+            for channels in (1, 2):
+                with self.subTest(sample_rate=sample_rate, channels=channels):
+                    count = sample_rate * 8 + 123
+                    samples = rng.normal(0, 0.08, (count, channels)).astype(np.float32)
+                    samples[:sample_rate] *= 0.0001
+                    samples[sample_rate * 4:sample_rate * 5] *= 0.02
+                    (shelf_b, shelf_a), (hp_b, hp_a) = _k_weighting_coefficients(sample_rate)
+                    weighted = lfilter(hp_b, hp_a, lfilter(shelf_b, shelf_a, samples.astype(np.float64), axis=0), axis=0)
+                    block = round(sample_rate * 0.4)
+                    step = round(block * 0.25)
+                    energies = np.array([
+                        np.mean(np.square(weighted[start:start + block]), axis=0).sum()
+                        for start in range(0, len(weighted) - block + 1, step)
+                    ])
+                    loudness = -0.691 + 10 * np.log10(np.maximum(energies, 1e-30))
+                    absolute = loudness >= -70
+                    gate = -0.691 + 10 * np.log10(np.mean(energies[absolute])) - 10
+                    expected = -0.691 + 10 * np.log10(np.mean(energies[absolute & (loudness >= gate)]))
+                    self.assertAlmostEqual(integrated_loudness_bs1770(samples, sample_rate), expected, places=8)
+
     def test_stereo_pan_and_demucs_model_are_stable(self) -> None:
         sample_rate = 22050
         duration = 1.25
@@ -209,7 +228,7 @@ class AudioEngineRegressionTests(unittest.TestCase):
         separator = result["models"]["deepSeparator"]
         image = result["stereoImage"]
         self.assertEqual(separator["model"], "htdemucs_ft")
-        self.assertEqual(separator["qualityProfile"], "spatial-q3-adaptive6")
+        self.assertEqual(separator["qualityProfile"], DEMUCS_QUALITY_PROFILE)
         self.assertEqual(separator["postprocess"], "softmask-v2-hybrid")
         self.assertEqual(separator["auxiliaryModel"], "htdemucs_6s")
         self.assertIn("shifts", separator["settings"])
@@ -301,6 +320,18 @@ class AudioEngineRegressionTests(unittest.TestCase):
                 np.column_stack([mono, mono]).astype(np.float32)
                 for mono in core.values()
             )
+            enhance_demucs_stems(final_paths, final_root)
+            enhanced_paths, enhanced_profile = build_adaptive_hybrid_stems(
+                primary_paths, auxiliary_paths, root / "memory-final", enhance=True,
+            )
+            self.assertEqual(enhanced_profile["accepted"], profile["accepted"])
+            self.assertEqual(set(read_stem_quality(root / "memory-final")),
+                             {path.stem for path in enhanced_paths})
+            for path in enhanced_paths:
+                expected, expected_sr = sf.read(final_root / path.name, dtype="float32")
+                actual, actual_sr = sf.read(path, dtype="float32")
+                self.assertEqual(expected_sr, actual_sr)
+                np.testing.assert_allclose(actual, expected, atol=3e-6, rtol=1e-5)
 
         self.assertEqual(profile["accepted"], ["guitar", "piano"])
         self.assertEqual({path.stem for path in final_paths}, {"vocals", "guitar", "piano", "other", "drums", "bass"})

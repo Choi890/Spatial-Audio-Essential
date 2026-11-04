@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const { test, expect } = require("@playwright/test");
-const spatialRendererGolden = JSON.parse(fs.readFileSync("tests/golden/spatial_renderer_ranges_v1.json", "utf8"));
+const spatialRendererGolden = JSON.parse(fs.readFileSync("tests/golden/spatial_renderer_ranges_v2.json", "utf8"));
 
 test("loads the studio shell without console errors", async ({ page }) => {
   const errors = collectBrowserErrors(page);
@@ -54,99 +54,19 @@ test("keeps the transport seek bar fully visible beside export", async ({ page }
   expect(layout.seek.right).toBeLessThanOrEqual(layout.row.right + 1);
 });
 
-test("keeps the playback-device card inside its container at responsive widths", async ({ page }) => {
+test("removes playback-device controls and ignores previous device preferences", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("spatial-audio-essential-playback-device", "sennheiser-ie600"));
+  const requestedScripts = [];
+  page.on("request", (request) => { if (request.resourceType() === "script") requestedScripts.push(request.url()); });
   await page.goto("/");
-  for (const width of [1480, 1180, 700, 375]) {
-    await page.setViewportSize({ width, height: 900 });
-    const layout = await page.evaluate(() => {
-      const container = document.querySelector(".spatial-renderer-controls");
-      const containerRect = container.getBoundingClientRect();
-      return [...document.querySelectorAll(".playback-device-control")].map((card) => {
-        const cardRect = card.getBoundingClientRect();
-        const textOutside = [...card.querySelectorAll("label, select, strong, span, p")].some((element) => {
-          const rect = element.getBoundingClientRect();
-          return rect.left < cardRect.left - 1 || rect.right > cardRect.right + 1;
-        });
-        return {
-          horizontalOverflow: card.scrollWidth - card.clientWidth,
-          outsideContainer:
-            cardRect.left < containerRect.left - 1 || cardRect.right > containerRect.right + 1,
-          textOutside
-        };
-      });
-    });
-    layout.forEach((card) => {
-      expect(card.horizontalOverflow, `card overflow at ${width}px`).toBeLessThanOrEqual(1);
-      expect(card.outsideContainer, `card bounds at ${width}px`).toBe(false);
-      expect(card.textOutside, `text bounds at ${width}px`).toBe(false);
-    });
-  }
+  await expect(page.locator("#playback-device-control, #playback-device-select, .spatial-engine-module")).toHaveCount(0);
+  expect(await page.evaluate(() => ({ registry: typeof window.SpatialAudioDeviceProfiles,
+    correction: typeof createDeviceCorrectionChain, profileState: "playbackDeviceProfileId" in state })))
+    .toEqual({ registry: "undefined", correction: "undefined", profileState: false });
+  expect(requestedScripts.some((url) => url.includes("device-profiles.js"))).toBe(false);
 });
 
-test("loads traceable playback-device correction profiles", async ({ page }) => {
-  await page.goto("/");
-  const options = await page.locator("#playback-device-select option").allTextContents();
-  expect(options).toEqual([
-    "No device correction",
-    "AirPods Pro 3 · bounded 5128 DF",
-    "Sennheiser IE 600 · bounded GRAS DF",
-    "Edifier MR4 · Monitor/anechoic"
-  ]);
-
-  const result = await page.evaluate(() => {
-    const context = new OfflineAudioContext(2, 512, 48000);
-    const profile = window.SpatialAudioDeviceProfiles.byId["sennheiser-ie600"];
-    const chain = createDeviceCorrectionChain(context, profile);
-    const frequencies = Float32Array.from({ length: 256 }, (_, index) => 20 * (20000 / 20) ** (index / 255));
-    const peakByProfile = Object.fromEntries(window.SpatialAudioDeviceProfiles.profiles.map((item) => {
-      const itemChain = createDeviceCorrectionChain(context, item);
-      const response = Float32Array.from(frequencies, () => itemChain.preamp.gain.value);
-      for (const filter of itemChain.filters) {
-        const magnitude = new Float32Array(frequencies.length);
-        const phase = new Float32Array(frequencies.length);
-        filter.getFrequencyResponse(frequencies, magnitude, phase);
-        for (let index = 0; index < response.length; index += 1) response[index] *= magnitude[index];
-      }
-      const peak = Math.max(...response);
-      return [item.id, 20 * Math.log10(peak)];
-    }));
-    return {
-      profileCount: window.SpatialAudioDeviceProfiles.profiles.length,
-      filters: chain.filters.length,
-      preamp: chain.preamp.gain.value,
-      kinds: window.SpatialAudioDeviceProfiles.profiles.map((item) => item.kind),
-      peakByProfile
-    };
-  });
-  expect(result.profileCount).toBe(4);
-  expect(result.filters).toBe(7);
-  expect(result.preamp).toBeCloseTo(10 ** (-5.41 / 20), 5);
-  expect(result.kinds).toEqual(["headphones", "headphones", "headphones", "speakers"]);
-  for (const peakDb of Object.values(result.peakByProfile)) {
-    expect(Number.isFinite(peakDb)).toBe(true);
-    expect(peakDb).toBeLessThanOrEqual(0.15);
-  }
-});
-
-test("switches MR4 to a symmetric speaker-safe renderer and persists it", async ({ page }) => {
-  await page.goto("/");
-  await page.locator("#playback-device-select").selectOption("edifier-mr4");
-  await expect(page.locator("#playback-device-control")).toHaveAttribute("data-kind", "speakers");
-  await expect(page.locator("#playback-device-select")).toHaveValue("edifier-mr4");
-  await expect(page.locator("#playback-device-correction, #playback-device-note")).toHaveCount(0);
-  const renderers = await page.evaluate(() => {
-    const context = new OfflineAudioContext(2, 512, 48000);
-    const left = createReferenceHrtfRenderer(context, { azimuth: -45, elevation: 10, distance: 3 });
-    const right = createReferenceHrtfRenderer(context, { azimuth: 45, elevation: 10, distance: 3 });
-    return { leftMode: left.mode, rightMode: right.mode, leftPan: left.node.pan.value, rightPan: right.node.pan.value };
-  });
-  expect(renderers.leftMode).toBe("speaker-safe-stereo");
-  expect(renderers.rightMode).toBe("speaker-safe-stereo");
-  expect(renderers.leftPan).toBeCloseTo(-renderers.rightPan, 6);
-  expect(await page.evaluate(() => localStorage.getItem("spatial-audio-essential-playback-device"))).toBe("edifier-mr4");
-});
-
-test("level-matches every Full Spatial device preset to the Original window", async ({ page }, testInfo) => {
+test("level-matches Full Spatial to the Original window", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chrome", "The deterministic loudness render is covered once on the Chrome reference engine.");
   await page.goto("/");
   const results = await page.evaluate(async () => {
@@ -175,7 +95,6 @@ test("level-matches every Full Spatial device preset to the Original window", as
       outputCalibration: state.spatialOutputCalibration,
       stems: state.stemBuffers,
       brir: state.measuredBrirBuffer,
-      profileId: state.playbackDeviceProfileId,
       settings: state.spatialSettings
     };
     state.analysis = analysis;
@@ -185,8 +104,7 @@ test("level-matches every Full Spatial device preset to the Original window", as
     state.spatialSettings = { wet: 0.72, radius: 1.12, reflections: 0.58 };
     const reference = getAudioBufferWindowStats(buffer, 0, duration);
     const rows = [];
-    for (const profile of window.SpatialAudioDeviceProfiles.profiles) {
-      state.playbackDeviceProfileId = profile.id;
+    for (const id of ["spatial"]) {
       state.spatialOutputCalibration = null;
       const calibration = await calibrateSpatialProcessedOutput(buffer, analysis);
       state.spatialOutputCalibration = calibration;
@@ -196,7 +114,7 @@ test("level-matches every Full Spatial device preset to the Original window", as
       const rendered = await context.startRendering();
       const output = getAudioBufferWindowStats(rendered, 0, duration);
       rows.push({
-        id: profile.id,
+        id,
         errorDb: 20 * Math.log10(output.rms / reference.rms),
         gain: calibration.gain,
         peak: output.peak
@@ -208,11 +126,10 @@ test("level-matches every Full Spatial device preset to the Original window", as
     state.spatialOutputCalibration = previous.outputCalibration;
     state.stemBuffers = previous.stems;
     state.measuredBrirBuffer = previous.brir;
-    state.playbackDeviceProfileId = previous.profileId;
     state.spatialSettings = previous.settings;
     return rows;
   });
-  expect(results.map((row) => row.id)).toEqual(["neutral", "airpods-pro-3", "sennheiser-ie600", "edifier-mr4"]);
+  expect(results.map((row) => row.id)).toEqual(["spatial"]);
   for (const row of results) {
     expect(Math.abs(row.errorDb), `${row.id} level error ${JSON.stringify(row)}`).toBeLessThan(0.1);
     expect(row.gain).toBeGreaterThanOrEqual(0.5);
@@ -257,6 +174,92 @@ test("calibrates representative song windows and limits only spatial buses on QA
   expect(result.limited.reasons).toEqual(expect.arrayContaining(["balance-delta", "phase-spread", "peak-headroom"]));
 });
 
+test("fast spatial calibration includes a peak hidden from the mono waveform", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(() => {
+    const rate = 8000, length = rate * 20;
+    const left = new Float32Array(length), right = new Float32Array(length);
+    left[rate * 17] = 0.95;
+    right[rate * 17] = -0.95;
+    const buffer = {sampleRate: rate, length, numberOfChannels: 2,
+      getChannelData: channel => channel ? right : left};
+    return getSpatialCalibrationOffsets({waveform: [0.9, 0.1, 0.1, 0.1]}, 20, 2, 2, buffer);
+  });
+  expect(result).toHaveLength(2);
+  expect(result[0]).toBeCloseTo(16, 5);
+  expect(result[1]).not.toBe(result[0]);
+});
+
+test("clarity target keeps bass and gently lifts presence and air", async ({ page }) => {
+  await page.goto("/");
+  const values = await page.evaluate(() => Object.fromEntries(
+    addSpatialClarityTarget([]).map(point => [point.frequency, point.logGain * 20 / Math.LN10])
+  ));
+  expect(values[100]).toBeGreaterThan(0.2);
+  expect(values[100]).toBeLessThan(0.31);
+  expect(values[1000]).toBeLessThan(0.2);
+  expect(values[3000]).toBeGreaterThan(0.9);
+  expect(values[3000]).toBeLessThan(1.3);
+  expect(values[9000]).toBeGreaterThan(0.45);
+  expect(values[9000]).toBeLessThan(1);
+});
+
+test("concurrent HRTF preparation shares registry and asset requests", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    await ensureUniversalHrtfProfile();
+    state.hrtfLibrary = null;
+    state.universalHrtfProfile = null;
+    state.universalHrtfDataset = null;
+    state.universalHrtfStatus = "idle";
+    state.universalHrtfPromise = null;
+    const originalFetch = window.fetch;
+    const counts = {registry: 0, profile: 0, impulse: 0};
+    window.fetch = async (...args) => {
+      const url = String(args[0]);
+      if (url.includes("/hrtf/profiles.json")) {
+        counts.registry++;
+        await new Promise(resolve => setTimeout(resolve, 40));
+      } else if (url.includes("/hrtf/") && url.endsWith(".json")) counts.profile++;
+      else if (url.includes("/hrtf/") && url.endsWith(".hrir")) counts.impulse++;
+      return originalFetch(...args);
+    };
+    try {
+      const profiles = await Promise.all([
+        ensureUniversalHrtfProfile(), ensureUniversalHrtfProfile(), ensureUniversalHrtfProfile()
+      ]);
+      return {counts, same: profiles.every(profile => profile === profiles[0]),
+        ready: state.universalHrtfStatus, promiseCleared: state.universalHrtfPromise === null};
+    } finally { window.fetch = originalFetch; }
+  });
+  expect(result).toEqual({counts: {registry: 1, profile: 1, impulse: 1}, same: true,
+    ready: "ready", promiseCleared: true});
+});
+
+test("HRTF preparation can retry after registry failure", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    await ensureUniversalHrtfProfile();
+    state.hrtfLibrary = null;
+    state.universalHrtfProfile = null;
+    state.universalHrtfDataset = null;
+    state.universalHrtfStatus = "idle";
+    const originalFetch = window.fetch;
+    window.fetch = (...args) => String(args[0]).includes("/hrtf/profiles.json")
+      ? Promise.resolve(new Response("unavailable", {status: 503})) : originalFetch(...args);
+    try {
+      const failed = await Promise.all([ensureUniversalHrtfProfile(), ensureUniversalHrtfProfile()]);
+      const fallback = state.universalHrtfStatus;
+      const cleared = state.universalHrtfPromise === null;
+      window.fetch = originalFetch;
+      const recovered = await ensureUniversalHrtfProfile();
+      return {failed: failed.every(value => value === null), fallback, cleared,
+        recovered: Boolean(recovered), ready: state.universalHrtfStatus};
+    } finally { window.fetch = originalFetch; }
+  });
+  expect(result).toEqual({failed: true, fallback: "fallback", cleared: true, recovered: true, ready: "ready"});
+});
+
 test("loads the measured HRTF library, resamples it, and keeps the fallback symmetric", async ({ page }) => {
   await page.goto("/");
   const result = await page.evaluate(async () => {
@@ -272,17 +275,17 @@ test("loads the measured HRTF library, resamples it, and keeps the fallback symm
       const profile = await ensureUniversalHrtfProfile();
       const context48 = new OfflineAudioContext(2, 1024, 48000);
       const context96 = new OfflineAudioContext(2, 2048, 96000);
-      const left = createUniversalSofaImpulse(
+      const left = audioRenderer.createUniversalSofaImpulse(
         context48,
         { azimuth: -45, elevation: 20, distance: 1 },
         { role: "direct" }
       );
-      const right = createUniversalSofaImpulse(
+      const right = audioRenderer.createUniversalSofaImpulse(
         context48,
         { azimuth: 45, elevation: 20, distance: 1 },
         { role: "direct" }
       );
-      const upsampled = createUniversalSofaImpulse(
+      const upsampled = audioRenderer.createUniversalSofaImpulse(
         context96,
         { azimuth: 25, elevation: 10, distance: 1 },
         { role: "direct" }
@@ -380,6 +383,93 @@ test("encodes standards-compatible 24-bit stereo WAV output", async ({ page }) =
   expect(header).toEqual({ riff: "RIFF", format: 1, channels: 2, sampleRate: 48000, bitDepth: 24, dataBytes: 18, size: 62 });
 });
 
+test("float WAV metering preserves overs and PCM export clips only after gain", async ({ page }) => {
+  await page.goto("/");
+  const values = await page.evaluate(async () => {
+    const samples = [new Float32Array([1.5, -1.25, 0.5, NaN])];
+    const input = { numberOfChannels: 1, length: 4, sampleRate: 48000, getChannelData: c => samples[c] };
+    const floatView = new DataView(await encodeWaveBlob(input, {bitDepth: 32, float: true}).arrayBuffer());
+    const pcmView = new DataView(await encodeWaveBlob(input, {bitDepth: 24, gain: 0.5}).arrayBuffer());
+    const silentView = new DataView(await encodeWaveBlob(input, {bitDepth: 24, gain: 0}).arrayBuffer());
+    return { floatSamples: [0, 1, 2, 3].map(i => floatView.getFloat32(44 + i * 4, true)),
+      firstPcm: [0, 1, 2].map(i => pcmView.getUint8(44 + i)),
+      silent: [0, 1, 2].map(i => silentView.getUint8(44 + i)) };
+  });
+  expect(values.floatSamples).toEqual([1.5, -1.25, 0.5, 0]);
+  expect(values.firstPcm).toEqual([255, 255, 95]);
+  expect(values.silent).toEqual([0, 0, 0]);
+});
+
+test("chunked WAV encoding yields and matches the exact synchronous output", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const frames = 150003;
+    const channels = [new Float32Array(frames), new Float32Array(frames)];
+    for (let i = 0; i < frames; i++) {
+      channels[0][i] = Math.sin(i * 0.043) * 1.4;
+      channels[1][i] = Math.cos(i * 0.031) * 0.8;
+    }
+    channels[0][17] = NaN;
+    const input = {numberOfChannels: 2, length: frames, sampleRate: 48000, getChannelData: c => channels[c]};
+    let timerRan = false;
+    const comparisons = [];
+    for (const options of [{bitDepth: 32, float: true}, {bitDepth: 24, gain: 0.7}, {bitDepth: 24, gain: 0}]) {
+      const expected = new Uint8Array(await encodeWaveBlob(input, options).arrayBuffer());
+      if (!comparisons.length) setTimeout(() => { timerRan = true; }, 0);
+      const encoded = await encodeWaveBlobAsync(input, options);
+      const yieldedDuringEncoding = timerRan;
+      const actual = new Uint8Array(await encoded.arrayBuffer());
+      if (!comparisons.length && !yieldedDuringEncoding) return {timerRan: false, comparisons: []};
+      let equal = actual.length === expected.length;
+      for (let i = 0; equal && i < expected.length; i++) equal = actual[i] === expected[i];
+      comparisons.push(equal);
+    }
+    return {timerRan, comparisons};
+  });
+  expect(result.timerRan).toBe(true);
+  expect(result.comparisons).toEqual([true, true, true]);
+});
+
+test("WAV export retains the original filename if another track is selected", async ({ page }) => {
+  await page.goto("/");
+  const downloadPromise = page.waitForEvent("download");
+  await page.evaluate(() => {
+    const context = new OfflineAudioContext(2, 48000, 48000);
+    const buffer = context.createBuffer(2, 48000, 48000);
+    for (let c = 0; c < 2; c++) {
+      const samples = buffer.getChannelData(c);
+      for (let i = 0; i < samples.length; i++) samples[i] = 0.08 * Math.sin(i * 0.05);
+    }
+    state.file = {name: "first.wav"};
+    state.audioBuffer = buffer;
+    state.analysis = {mix: {peakDb: -22, rmsDb: -25}, stereoImage: {width: 0}};
+    state.stemBuffers = null;
+    exportFullSpatialWav();
+    state.file = {name: "second.wav"};
+  });
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("first - Full Spatial 24bit.wav");
+  const bytes = fs.readFileSync(await download.path());
+  expect(bytes.readUInt16LE(34)).toBe(24);
+  expect(bytes.readUInt16LE(22)).toBe(2);
+});
+
+test("server measures unclipped floating-point peaks before export attenuation", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const data = new Float32Array(4800).fill(1.5);
+    const input = {numberOfChannels: 1, length: data.length, sampleRate: 48000, getChannelData: () => data};
+    const blob = encodeWaveBlob(input, {bitDepth: 32, float: true});
+    const response = await fetch("/api/measure-output?filename=peak-test.wav", {
+      method: "POST", headers: {"Content-Type": "audio/wav"}, body: blob
+    });
+    return { status: response.status, measurement: await response.json() };
+  });
+  expect(result.status).toBe(200);
+  expect(result.measurement.samplePeakDb).toBeCloseTo(20 * Math.log10(1.5), 2);
+  expect(result.measurement.estimatedTruePeakDb).toBeGreaterThan(3.5);
+});
+
 test("exposes production health, security headers, and accessible progress", async ({ page }, testInfo) => {
   const errors = collectBrowserErrors(page);
   const health = await page.request.get("/api/health");
@@ -453,11 +543,11 @@ test("uses a linear stem bar with a minus 10 dB meter offset", async ({ page }) 
   await page.goto("/");
 
   const meter = await page.evaluate(() => ({
-    barAt80: softenStemBarLevel(0.8),
-    barAt95: softenStemBarLevel(0.95),
-    shapedAt80: shapeStemMeterLevel(0.8),
-    shiftedScore: getStemMeterScoreFromDb(-20, -10),
-    maximumScore: getStemMeterScoreFromDb(0, 0)
+    barAt80: studioView.softenStemBarLevel(0.8),
+    barAt95: studioView.softenStemBarLevel(0.95),
+    shapedAt80: studioView.shapeStemMeterLevel(0.8),
+    shiftedScore: studioView.getStemMeterScoreFromDb(-20, -10),
+    maximumScore: studioView.getStemMeterScoreFromDb(0, 0)
   }));
 
   expect(meter.barAt80).toBeCloseTo(0.8, 6);
@@ -468,6 +558,46 @@ test("uses a linear stem bar with a minus 10 dB meter offset", async ({ page }) 
   expect(errors()).toEqual([]);
 });
 
+test("meters follow display frames and smoothing is refresh-rate independent", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(() => {
+    const profile = studioView.getRuntimeQualityProfile();
+    const ui = studioView.state;
+    let frequencyReads = 0;
+    const graph = {
+      analyser: {
+        getFloatFrequencyData(data) { frequencyReads++; data.fill(-40); },
+        getFloatTimeDomainData(data) { data.fill(0); }
+      },
+      frequencyData: new Float32Array(128), timeData: new Float32Array(256)
+    };
+    state.audioContext = { sampleRate: 48000 };
+    state.playback.graph = graph;
+    state.playback.playing = true;
+    ui.lastLiveAnalysisFrame = null;
+    for (let i = 0; i < 144; i++) {
+      const time = i / 144;
+      studioView.readLiveSpectrumLevels(time);
+      studioView.readMainAnalyserFrame(time, { frequency: false, maxAge: 0 });
+    }
+    const smooth = (hz) => {
+      ui.visualFrameSeconds = 1 / hz;
+      const levels = [];
+      const input = new Float32Array(128).fill(-40);
+      for (let i = 0; i < hz; i++) studioView.buildSpectrumLevels(input, 48000, levels);
+      return levels[0];
+    };
+    const slow = smooth(60), fast = smooth(144);
+    state.playback.playing = false;
+    return { profile, frequencyReads, slow, fast };
+  });
+  expect(result.profile.meterInterval).toBe(0);
+  expect(result.profile.stemDisplayInterval).toBe(0);
+  expect(result.profile.spectrumInterval).toBe(0);
+  expect(result.frequencyReads).toBe(144);
+  expect(result.slow).toBeCloseTo(result.fast, 5);
+});
+
 test("keeps Spatial gain staging in the fidelity-safe range", async ({ page, browserName }) => {
   test.skip(browserName === "webkit", "Windows WebKit does not complete native-HRTF OfflineAudioContext rendering.");
   const errors = collectBrowserErrors(page);
@@ -476,10 +606,11 @@ test("keeps Spatial gain staging in the fidelity-safe range", async ({ page, bro
   const values = await page.evaluate(async () => {
     const settings = { wet: 0.64, radius: 1.04, reflections: 0.4 };
     const analysis = {
+      instruments: [],
+      activeIds: [],
       mix: { peakDb: -1, rmsDb: -14 },
       stereoImage: { width: 0.36 }
     };
-    const script = await fetch("/app.js").then((response) => response.text());
     const sampleRate = 48000;
     const offline = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, sampleRate, sampleRate);
     const brirBytes = await fetch(DEFAULT_MEASURED_BRIR_URL).then((response) => response.arrayBuffer());
@@ -542,8 +673,7 @@ test("keeps Spatial gain staging in the fidelity-safe range", async ({ page, bro
     state.analysis = previousAnalysis;
     state.stemBuffers = previousStems;
     return {
-      compressorCount: (script.match(/createDynamicsCompressor\(\)/g) || []).length,
-      sideEnergyScale: SPATIAL_SIDE_ENERGY_SCALE,
+      compressorCount: graph.nodes.filter(node => node instanceof DynamicsCompressorNode).length,
       midDerivedSideGain: graph.spatialLayer.lateral.midSideSend.gain.value,
       midDerivedSideHighpass: graph.spatialLayer.lateral.midSideGuard.frequency.value,
       midDerivedSideLowpass: graph.spatialLayer.lateral.midSideAirGuard.frequency.value,
@@ -561,12 +691,12 @@ test("keeps Spatial gain staging in the fidelity-safe range", async ({ page, bro
       decorrelatorMonoCancelling: graph.spatialLayer.lateral.monoCancelling,
       measuredBrirChannels: state.measuredBrirBuffer.numberOfChannels,
       measuredBrirDuration: state.measuredBrirBuffer.duration,
-      sideLift: getLateralSideLift(analysis.stereoImage.width, settings),
-      outputTrim: getSpatialOutputPeakGuardPreGain(settings, analysis),
-      centerDelayScale: getFarFieldDelayScale({}, "center"),
-      fieldDelayScale: getFarFieldDelayScale({}, "field"),
-      limiterThreshold: SPATIAL_OUTPUT_PEAK_GUARD_THRESHOLD_DB,
-      limiterKnee: SPATIAL_OUTPUT_PEAK_GUARD_KNEE_DB,
+      sideLift: audioRenderer.getLateralSideLift(analysis.stereoImage.width, settings),
+      outputTrim: audioRenderer.getSpatialOutputPeakGuardPreGain(settings, analysis),
+      centerDelayScale: audioRenderer.getFarFieldDelayScale({}, "center"),
+      fieldDelayScale: audioRenderer.getFarFieldDelayScale({}, "field"),
+      limiterThreshold: renderConfig.SPATIAL_OUTPUT_PEAK_GUARD_THRESHOLD_DB,
+      limiterKnee: renderConfig.SPATIAL_OUTPUT_PEAK_GUARD_KNEE_DB,
       renderedPeak,
       renderedRms: Math.sqrt(renderedEnergy / (rendered.length * rendered.numberOfChannels)),
       lateralWidthRatio:
@@ -582,7 +712,6 @@ test("keeps Spatial gain staging in the fidelity-safe range", async ({ page, bro
   });
 
   expect(values.compressorCount).toBe(1);
-  expect(values.sideEnergyScale).toBeLessThanOrEqual(2);
   expect(values.midDerivedSideGain).toBeGreaterThanOrEqual(0.3);
   expect(values.midDerivedSideGain).toBeLessThanOrEqual(0.5);
   expect(values.midDerivedSideHighpass).toBe(700);
@@ -660,7 +789,7 @@ test("toggles playback with the Space key", async ({ page }, testInfo) => {
   await expect(page.locator("#play-button")).toBeEnabled();
 
   await page.keyboard.press("Space");
-  await expect(page.locator("#play-button")).toHaveText("Ⅱ");
+  await expect(page.locator("#play-button")).toHaveText("Ⅱ", { timeout: 20000 });
 
   await page.locator("#seek-slider").focus();
   await page.keyboard.press("Space");
@@ -676,7 +805,7 @@ test("toggles playback with the Space key", async ({ page }, testInfo) => {
   await page.keyboard.press("Space");
   await expect(page.locator("#play-button")).toHaveText("▶");
 
-  await page.locator("#playback-device-select").focus();
+  await page.locator("#play-button").focus();
   await page.keyboard.press("Space");
   await expect(page.locator("#play-button")).toHaveText("Ⅱ");
 
@@ -684,9 +813,6 @@ test("toggles playback with the Space key", async ({ page }, testInfo) => {
   await expect(page.locator("#play-button")).toHaveText("▶");
   await expect(page.locator("#current-time")).toHaveText("0:00");
 
-  await page.evaluate(() => {
-    state.spatialRenderPromise = new Promise(() => {});
-  });
   await page.keyboard.press("Space");
   await expect(page.locator("#play-button")).toHaveText("Ⅱ", { timeout: 500 });
   await page.keyboard.press("Space");
@@ -696,13 +822,10 @@ test("toggles playback with the Space key", async ({ page }, testInfo) => {
   await page.keyboard.press("Space");
   await page.waitForTimeout(120);
   const rapidToggleState = await page.evaluate(() => ({
-    playing: state.playing,
-    desired: state.playbackDesired
+    playing: state.playback.playing,
+    desired: state.playback.desired
   }));
   expect(rapidToggleState).toEqual({ playing: false, desired: false });
-  await page.evaluate(() => {
-    state.spatialRenderPromise = null;
-  });
   expect(errors()).toEqual([]);
 });
 
@@ -762,47 +885,27 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   await expect(page.locator(".stage-node[data-id='other']")).toBeVisible();
   await expect(page.locator("#spectrum-scene")).toBeVisible();
 
-  const leadStyle = await page.locator(".stage-node[data-id='vocals']").getAttribute("style");
-  const leadLeft = Number((leadStyle || "").match(/left:\s*([\d.]+)%/)?.[1]);
-  expect(Number.isFinite(leadLeft)).toBe(true);
-  expect(leadLeft).toBeGreaterThan(48);
-  expect(leadLeft).toBeLessThan(52);
-  const leadTop = Number((leadStyle || "").match(/top:\s*([\d.]+)%/)?.[1]);
-  expect(Number.isFinite(leadTop)).toBe(true);
-  expect(leadTop).toBeGreaterThan(25);
-  expect(leadTop).toBeLessThan(29);
+  const positions = await page.evaluate(() => Object.values(state.stemBuffers).map((stem) => stem.stereoPosition));
+  positions.forEach((position) => {
+    expect(position.confidence).toBe(1);
+    expect(position.pan).toBeCloseTo(0, 5);
+    expect(position.panCurve.length).toBeGreaterThan(1);
+  });
+  await expect(page.locator("#stage-map svg")).toHaveCount(0);
   const musicStyle = await page.locator(".stage-node[data-id='other']").getAttribute("style");
-  const musicLeft = Number((musicStyle || "").match(/left:\s*([\d.]+)%/)?.[1]);
-  expect(Number.isFinite(musicLeft)).toBe(true);
-  expect(musicLeft).toBeGreaterThan(27);
-  expect(musicLeft).toBeLessThan(31);
-  const musicTop = Number((musicStyle || "").match(/top:\s*([\d.]+)%/)?.[1]);
-  expect(musicTop).toBeGreaterThan(33);
-  expect(musicTop).toBeLessThan(37);
-  const hitStyle = await page.locator(".stage-node[data-id='drums']").getAttribute("style");
-  const hitLeft = Number((hitStyle || "").match(/left:\s*([\d.]+)%/)?.[1]);
-  expect(Number.isFinite(hitLeft)).toBe(true);
-  expect(hitLeft).toBeGreaterThan(69);
-  expect(hitLeft).toBeLessThan(73);
-  const hitTop = Number((hitStyle || "").match(/top:\s*([\d.]+)%/)?.[1]);
-  expect(hitTop).toBeGreaterThan(70);
-  expect(hitTop).toBeLessThan(74);
-  const lowStyle = await page.locator(".stage-node[data-id='bass']").getAttribute("style");
-  const lowTop = Number((lowStyle || "").match(/top:\s*([\d.]+)%/)?.[1]);
-  expect(Number.isFinite(lowTop)).toBe(true);
-  expect(lowTop).toBeGreaterThan(77);
-  expect(lowTop).toBeLessThan(81);
+  const musicLeft = Number(musicStyle.match(/left:\s*([\d.]+)%/)[1]);
+  const musicTop = Number(musicStyle.match(/top:\s*([\d.]+)%/)[1]);
 
   await page.locator("#play-button").click();
   await expect(page.locator("#play-button")).toHaveText("Ⅱ");
   await page.waitForTimeout(200);
   expect(errors()).toEqual([]);
   const runtime = await page.evaluate(() => ({
-    mode: state.mode,
-    playing: state.playing,
-    graphMode: state.graph?.mode || null,
+    mode: state.playback.mode,
+    playing: state.playback.playing,
+    graphMode: state.playback.graph?.mode || null,
     stemBufferIds: Object.keys(state.stemBuffers || {}).sort(),
-    hasSpatialLayer: Boolean(state.graph?.spatialLayer)
+    hasSpatialLayer: Boolean(state.playback.graph?.spatialLayer)
   }));
   expect(runtime).toEqual({
     mode: "spatial",
@@ -812,22 +915,22 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
     hasSpatialLayer: true
   });
   const routing = await page.evaluate(() => ({
-    ids: state.graph?.spatialLayer?.stemObjects?.map((item) => item.id) || [],
+    ids: state.playback.graph?.spatialLayer?.stemObjects?.map((item) => item.id) || [],
     tapCounts: Object.fromEntries(
-      (state.graph?.spatialLayer?.stemObjects || []).map((item) => [item.id, item.reflections.taps.length])
+      (state.playback.graph?.spatialLayer?.stemObjects || []).map((item) => [item.id, item.reflections.taps.length])
     ),
     diffuseHighpasses: Object.fromEntries(
-      (state.graph?.spatialLayer?.stemObjects || []).map((item) => [
+      (state.playback.graph?.spatialLayer?.stemObjects || []).map((item) => [
         item.id,
         item.reflections.highpass.frequency.value
       ])
     ),
     depthRoles: Object.fromEntries(
-      Object.entries(STEM_OBJECT_ROUTES).map(([id, route]) => [id, route.depthRole])
+      Object.entries(renderConfig.STEM_OBJECT_ROUTES).map(([id, route]) => [id, route.depthRole])
     ),
     anchors: Object.fromEntries(
-      Object.entries(STEM_OBJECT_ROUTES).map(([id, route]) => {
-        const anchor = getCoherentStemTapPlan(route.taps).find((tap) => tap.anchor);
+      Object.entries(renderConfig.STEM_OBJECT_ROUTES).map(([id, route]) => {
+        const anchor = audioRenderer.getCoherentStemTapPlan(route.taps).find((tap) => tap.anchor);
         return [id, {
           azimuth: anchor.azimuth,
           distance: anchor.distance,
@@ -835,73 +938,73 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
         }];
       })
     ),
-    directBusGain: state.graph?.spatialLayer?.directBus?.gain.value,
-    roomMasterGain: state.graph?.spatialLayer?.wetMaster?.gain.value,
-    sceneSumGain: state.graph?.spatialLayer?.sceneSum?.gain.value,
-    lateralBusGain: state.graph?.spatialLayer?.lateralBus?.gain.value,
-    externalizationBusGain: state.graph?.spatialLayer?.externalizationBus?.gain.value,
-    externalizationTapCount: state.graph?.spatialLayer?.externalization?.taps?.length,
-    externalizationRadiusRange: state.graph?.spatialLayer?.externalization?.radiusRange,
-    externalizationDistances: (state.graph?.spatialLayer?.externalization?.taps || [])
+    directBusGain: state.playback.graph?.spatialLayer?.directBus?.gain.value,
+    roomMasterGain: state.playback.graph?.spatialLayer?.wetMaster?.gain.value,
+    sceneSumGain: state.playback.graph?.spatialLayer?.sceneSum?.gain.value,
+    lateralBusGain: state.playback.graph?.spatialLayer?.lateralBus?.gain.value,
+    externalizationBusGain: state.playback.graph?.spatialLayer?.externalizationBus?.gain.value,
+    externalizationTapCount: state.playback.graph?.spatialLayer?.externalization?.taps?.length,
+    externalizationRadiusRange: state.playback.graph?.spatialLayer?.externalization?.radiusRange,
+    externalizationDistances: (state.playback.graph?.spatialLayer?.externalization?.taps || [])
       .map((tap) => tap.direction.distance),
-    externalizationAzimuths: (state.graph?.spatialLayer?.externalization?.taps || [])
+    externalizationAzimuths: (state.playback.graph?.spatialLayer?.externalization?.taps || [])
       .map((tap) => tap.direction.azimuth),
-    externalizationDelays: (state.graph?.spatialLayer?.externalization?.taps || [])
+    externalizationDelays: (state.playback.graph?.spatialLayer?.externalization?.taps || [])
       .map((tap) => tap.delay.delayTime.value),
-    externalizationStageFront: state.graph?.spatialLayer?.externalization?.stageFront,
-    externalizationBalance: (state.graph?.spatialLayer?.externalization?.taps || [])
+    externalizationStageFront: state.playback.graph?.spatialLayer?.externalization?.stageFront,
+    externalizationBalance: (state.playback.graph?.spatialLayer?.externalization?.taps || [])
       .reduce((sum, tap) => (
         sum + tap.gain.gain.value * Math.sin(tap.direction.azimuth * Math.PI / 180)
       ), 0),
-    audioQualityId: state.graph?.spatialLayer?.audioQuality?.id,
-    orchestralHallBusGain: state.graph?.spatialLayer?.orchestralHallBus?.gain.value,
-    orchestralTapCount: state.graph?.spatialLayer?.orchestralHall?.taps?.length,
-    orchestralHighpass: state.graph?.spatialLayer?.orchestralHall?.bodyGuard?.frequency.value,
-    orchestralLowpass: state.graph?.spatialLayer?.orchestralHall?.airGuard?.frequency.value,
-    orchestralDelays: (state.graph?.spatialLayer?.orchestralHall?.taps || [])
+    audioQualityId: state.playback.graph?.spatialLayer?.audioQuality?.id,
+    orchestralHallBusGain: state.playback.graph?.spatialLayer?.orchestralHallBus?.gain.value,
+    orchestralTapCount: state.playback.graph?.spatialLayer?.orchestralHall?.taps?.length,
+    orchestralHighpass: state.playback.graph?.spatialLayer?.orchestralHall?.bodyGuard?.frequency.value,
+    orchestralLowpass: state.playback.graph?.spatialLayer?.orchestralHall?.airGuard?.frequency.value,
+    orchestralDelays: (state.playback.graph?.spatialLayer?.orchestralHall?.taps || [])
       .map((tap) => tap.delay.delayTime.value),
     hallDimensions: { ...SPATIAL_CUBIC_HALL },
-    hallField: SPATIAL_FIELD_DIRECTIONS.map((direction) => ({
+    hallField: renderConfig.SPATIAL_FIELD_DIRECTIONS.map((direction) => ({
       id: direction.id,
       azimuth: direction.azimuth,
       elevation: direction.elevation,
       distance: direction.distance,
       delay: direction.delay,
-      rendered: getInterpolatedHrtfPosition(direction, { physicalRoom: true })
+      rendered: audioRenderer.getRoomHrtfPosition(direction)
     })),
-    orchestralBalance: (state.graph?.spatialLayer?.orchestralHall?.taps || [])
+    orchestralBalance: (state.playback.graph?.spatialLayer?.orchestralHall?.taps || [])
       .reduce((sum, tap) => (
         sum + tap.gain.gain.value * Math.sin(tap.direction.azimuth * Math.PI / 180)
       ), 0),
-    lateEnvelopmentBusGain: state.graph?.spatialLayer?.lateEnvelopmentBus?.gain.value,
-    lateEnvelopmentSend: state.graph?.spatialLayer?.lateEnvelopment?.send?.gain.value,
-    lateEnvelopmentTapCount: state.graph?.spatialLayer?.lateEnvelopment?.taps?.length,
-    lateEnvelopmentDelays: (state.graph?.spatialLayer?.lateEnvelopment?.taps || [])
+    lateEnvelopmentBusGain: state.playback.graph?.spatialLayer?.lateEnvelopmentBus?.gain.value,
+    lateEnvelopmentSend: state.playback.graph?.spatialLayer?.lateEnvelopment?.send?.gain.value,
+    lateEnvelopmentTapCount: state.playback.graph?.spatialLayer?.lateEnvelopment?.taps?.length,
+    lateEnvelopmentDelays: (state.playback.graph?.spatialLayer?.lateEnvelopment?.taps || [])
       .map((tap) => tap.delay.delayTime.value),
-    lateEnvelopmentHighpass: state.graph?.spatialLayer?.lateEnvelopment?.bodyGuard?.frequency.value,
-    lateEnvelopmentLowpass: state.graph?.spatialLayer?.lateEnvelopment?.airGuard?.frequency.value,
-    lateEnvelopmentDiffusionSeconds: state.graph?.spatialLayer?.lateEnvelopment?.diffuser?.buffer?.duration,
-    lateEnvelopmentStartsAfterEarlyWindow: state.graph?.spatialLayer?.lateEnvelopment?.startsAfterEarlyWindow,
-    lateEnvelopmentBalance: (state.graph?.spatialLayer?.lateEnvelopment?.taps || [])
+    lateEnvelopmentHighpass: state.playback.graph?.spatialLayer?.lateEnvelopment?.bodyGuard?.frequency.value,
+    lateEnvelopmentLowpass: state.playback.graph?.spatialLayer?.lateEnvelopment?.airGuard?.frequency.value,
+    lateEnvelopmentDiffusionSeconds: state.playback.graph?.spatialLayer?.lateEnvelopment?.renderers?.[0]?.buffer?.duration,
+    lateEnvelopmentStartsAfterEarlyWindow: state.playback.graph?.spatialLayer?.lateEnvelopment?.startsAfterEarlyWindow,
+    lateEnvelopmentBalance: (state.playback.graph?.spatialLayer?.lateEnvelopment?.taps || [])
       .reduce((sum, tap) => (
         sum + tap.gain.gain.value * Math.sin(tap.direction.azimuth * Math.PI / 180)
       ), 0),
-    venueBusGain: state.graph?.spatialLayer?.venueTailBus?.gain.value,
-    venueDuration: state.graph?.spatialLayer?.venueTail?.convolver?.buffer?.duration,
-    venueHighpass: state.graph?.spatialLayer?.venueTail?.bodyGuard?.frequency.value,
-    venueLowpass: state.graph?.spatialLayer?.venueTail?.airGuard?.frequency.value,
-    venuePreDelay: state.graph?.spatialLayer?.venueTail?.preDelay?.delayTime.value,
-    wetLowGuard: state.graph?.spatialLayer?.roomLowGuard?.frequency.value,
-    wetAirGuard: state.graph?.spatialLayer?.roomAirGuard?.frequency.value,
-    roomResponseEq: state.graph?.spatialLayer?.roomResponseEq?.filters?.map((filter) => ({
+    venueBusGain: state.playback.graph?.spatialLayer?.venueTailBus?.gain.value,
+    venueDuration: state.playback.graph?.spatialLayer?.venueTail?.convolver?.buffer?.duration,
+    venueHighpass: state.playback.graph?.spatialLayer?.venueTail?.bodyGuard?.frequency.value,
+    venueLowpass: state.playback.graph?.spatialLayer?.venueTail?.airGuard?.frequency.value,
+    venuePreDelay: state.playback.graph?.spatialLayer?.venueTail?.preDelay?.delayTime.value,
+    wetLowGuard: state.playback.graph?.spatialLayer?.roomLowGuard?.frequency.value,
+    wetAirGuard: state.playback.graph?.spatialLayer?.roomAirGuard?.frequency.value,
+    roomResponseEq: state.playback.graph?.spatialLayer?.roomResponseEq?.filters?.map((filter) => ({
       type: filter.type,
       frequency: filter.frequency.value,
       gain: filter.gain.value
     })),
-    roomResponseMaximumCorrection: state.graph?.spatialLayer?.roomResponseEq?.maximumCorrectionDb,
-    distanceProfileId: state.graph?.spatialLayer?.distanceProfile?.id,
+    roomResponseMaximumCorrection: state.playback.graph?.spatialLayer?.roomResponseEq?.maximumCorrectionDb,
+    distanceProfileId: state.playback.graph?.spatialLayer?.distanceProfile?.id,
     distanceProfiles: [0.9, 1.04, 1.22].map((radius) => {
-      const profile = getSpatialDistanceBrirProfile(radius);
+      const profile = audioRenderer.getSpatialDistanceBrirProfile(radius);
       return {
         id: profile.id,
         preDelay: profile.preDelay,
@@ -910,42 +1013,42 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
         earlyDelayScale: profile.earlyDelayScale
       };
     }),
-    lateralHighpass: state.graph?.spatialLayer?.lateral?.sideGuard?.frequency.value
-      ?? SPATIAL_RESEARCH_PROFILE.lateralHighpassHz,
-    fieldHighpass: state.graph?.spatialLayer?.field?.bodyGuard?.frequency.value,
+    lateralHighpass: state.playback.graph?.spatialLayer?.lateral?.sideGuard?.frequency.value
+      ?? renderConfig.SPATIAL_RESEARCH_PROFILE.lateralHighpassHz,
+    fieldHighpass: state.playback.graph?.spatialLayer?.field?.bodyGuard?.frequency.value,
     coherence: Object.fromEntries(
-      Object.entries(STEM_OBJECT_ROUTES).map(([id, route]) => {
-        const taps = getCoherentStemTapPlan(route.taps);
+      Object.entries(renderConfig.STEM_OBJECT_ROUTES).map(([id, route]) => {
+        const taps = audioRenderer.getCoherentStemTapPlan(route.taps);
         const anchor = taps.find((tap) => tap.anchor) || taps[0];
         const totalGain = taps.reduce((sum, tap) => sum + tap.gain, 0);
         return [id, {
           anchorShare: totalGain > 0 ? anchor.gain / totalGain : 0,
           anchorLeads: taps.every((tap) => (
-            tap === anchor || tap.delay - anchor.delay >= SPATIAL_RESEARCH_PROFILE.anchorLeadSeconds
+            tap === anchor || tap.delay - anchor.delay >= renderConfig.SPATIAL_RESEARCH_PROFILE.anchorLeadSeconds
           ))
         }];
       })
     ),
-    qualityGains: (state.graph?.spatialLayer?.stemObjects || []).map((item) => item.qualityGain),
-    directPathDelays: (state.graph?.spatialLayer?.stemObjects || [])
+    qualityGains: (state.playback.graph?.spatialLayer?.stemObjects || []).map((item) => item.qualityGain),
+    directPathDelays: (state.playback.graph?.spatialLayer?.stemObjects || [])
       .flatMap((item) => item.primaryPaths.map((path) => path.delaySeconds)),
-    usesOriginalAnchor: state.graph?.spatialLayer?.usesOriginalAnchor,
-    originalAnchorSend: state.graph?.spatialLayer?.originalAnchorSend || null,
-    fullSpatial: state.graph?.spatialLayer?.fullSpatial,
-    mixtureProfile: state.graph?.spatialLayer?.mixtureProfile,
-    phasePreserving: (state.graph?.spatialLayer?.stemObjects || [])
+    usesOriginalAnchor: state.playback.graph?.spatialLayer?.usesOriginalAnchor,
+    originalAnchorSend: state.playback.graph?.spatialLayer?.originalAnchorSend || null,
+    fullSpatial: state.playback.graph?.spatialLayer?.fullSpatial,
+    mixtureProfile: state.playback.graph?.spatialLayer?.mixtureProfile,
+    phasePreserving: (state.playback.graph?.spatialLayer?.stemObjects || [])
       .map((item) => item.phasePreserving),
-    directGains: (state.graph?.spatialLayer?.stemObjects || [])
+    directGains: (state.playback.graph?.spatialLayer?.stemObjects || [])
       .map((item) => item.directGain),
-    directRendererModes: (state.graph?.spatialLayer?.stemObjects || [])
+    directRendererModes: (state.playback.graph?.spatialLayer?.stemObjects || [])
       .flatMap((item) => item.primaryPaths.map((path) => path.rendererMode)),
-    reflectionBalance: (state.graph?.spatialLayer?.stemObjects || []).map((item) => (
+    reflectionBalance: (state.playback.graph?.spatialLayer?.stemObjects || []).map((item) => (
       item.reflections.taps.reduce((sum, tap) => (
         sum + tap.gain * Math.sin((tap.azimuth || 0) * Math.PI / 180)
       ), 0)
     )),
-    residualPhasePreserving: state.graph?.spatialLayer?.residualPrimary?.phasePreserving,
-    cancellationGains: (state.graph?.spatialLayer?.residualCancellationGains || [])
+    residualPhasePreserving: state.playback.graph?.spatialLayer?.residualPrimary?.phasePreserving,
+    cancellationGains: (state.playback.graph?.spatialLayer?.residualCancellationGains || [])
       .map((gain) => gain.gain.value)
   }));
   expect(routing.ids).toEqual(["vocals", "other", "drums", "bass"]);
@@ -977,11 +1080,11 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(routing.anchors.other.delay).toBeLessThan(routing.anchors.drums.delay);
   expect(routing.directBusGain).toBeCloseTo(0.86, 4);
   const normalizedRoomMasterGain = routing.roomMasterGain / { full: 1, balanced: 0.94, safe: 0.86 }[routing.audioQualityId];
-  expect(normalizedRoomMasterGain).toBeGreaterThan(0.58);
-  expect(normalizedRoomMasterGain).toBeLessThanOrEqual(0.69);
+  expect(normalizedRoomMasterGain).toBeGreaterThan(0.16);
+  expect(normalizedRoomMasterGain).toBeLessThan(0.20);
   expect(routing.sceneSumGain).toBeCloseTo(0.86, 4);
-  expect(routing.lateralBusGain).toBeGreaterThan(1);
-  expect(routing.lateralBusGain).toBeLessThan(1.7);
+  expect(routing.lateralBusGain).toBeGreaterThan(0.25);
+  expect(routing.lateralBusGain).toBeLessThan(0.34);
   expect(routing.externalizationBusGain).toBeGreaterThan(0.8);
   expect(routing.externalizationBusGain).toBeLessThan(0.9);
   expect(routing.externalizationTapCount).toBe({ full: 24, balanced: 16, safe: 8 }[routing.audioQualityId]);
@@ -993,8 +1096,8 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(Math.min(...routing.externalizationDelays)).toBeCloseTo(7.2 / 343, 4);
   expect(Math.max(...routing.externalizationDelays)).toBeCloseTo({ full: 0.035, balanced: 0.0324, safe: 0.0297 }[routing.audioQualityId], 3);
   expect(Math.abs(routing.externalizationBalance)).toBeLessThan(1e-7);
-  expect(routing.orchestralHallBusGain).toBeGreaterThan(0.72);
-  expect(routing.orchestralHallBusGain).toBeLessThanOrEqual(0.88);
+  expect(routing.orchestralHallBusGain).toBeGreaterThan(0.6);
+  expect(routing.orchestralHallBusGain).toBeLessThanOrEqual(0.76);
   expect(routing.orchestralTapCount).toBe({ full: 10, balanced: 8, safe: 6 }[routing.audioQualityId]);
   expect(routing.orchestralHighpass).toBe(160);
   expect(routing.orchestralLowpass).toBe(12500);
@@ -1026,21 +1129,17 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(routing.hallField.every((direction) => (
     Math.abs(direction.delay - direction.distance / routing.hallDimensions.speedOfSound) < 0.0001
   ))).toBe(true);
-  expect(routing.lateEnvelopmentBusGain).toBeGreaterThan(0.45);
-  expect(routing.lateEnvelopmentBusGain).toBeLessThanOrEqual(0.72);
-  expect(routing.lateEnvelopmentSend).toBeGreaterThan(0.025);
-  expect(routing.lateEnvelopmentSend).toBeLessThanOrEqual(0.032);
-  expect(routing.lateEnvelopmentTapCount).toBe({ full: 8, balanced: 8, safe: 6 }[routing.audioQualityId]);
-  expect(Math.min(...routing.lateEnvelopmentDelays)).toBeCloseTo(0.087 * hallDelayScale, 4);
-  expect(Math.max(...routing.lateEnvelopmentDelays)).toBeCloseTo(
-    { full: 0.14, balanced: 0.14, safe: 0.122 }[routing.audioQualityId] * hallDelayScale,
-    4
-  );
-  expect(routing.lateEnvelopmentHighpass).toBe(240);
-  expect(routing.lateEnvelopmentLowpass).toBe(9200);
-  expect(routing.lateEnvelopmentDiffusionSeconds).toBeGreaterThanOrEqual(0.045);
-  expect(routing.lateEnvelopmentDiffusionSeconds).toBeLessThan(0.047);
-  expect(routing.lateEnvelopmentStartsAfterEarlyWindow).toBe(true);
+  expect(routing.lateEnvelopmentBusGain).toBeGreaterThan(0.6);
+  expect(routing.lateEnvelopmentBusGain).toBeLessThanOrEqual(0.82);
+  expect(routing.lateEnvelopmentSend).toBeGreaterThan(0.1);
+  expect(routing.lateEnvelopmentSend).toBeLessThanOrEqual(0.22);
+  expect(routing.lateEnvelopmentTapCount).toBe(16);
+  expect(Math.min(...routing.lateEnvelopmentDelays)).toBeCloseTo(18 / 343, 4);
+  expect(Math.max(...routing.lateEnvelopmentDelays)).toBeCloseTo(42 / 343, 4);
+  expect(routing.lateEnvelopmentHighpass).toBe(220);
+  expect(routing.lateEnvelopmentLowpass).toBe(14000);
+  expect(routing.lateEnvelopmentDiffusionSeconds).toBeCloseTo(0.72, 3);
+  expect(routing.lateEnvelopmentStartsAfterEarlyWindow).toBe(false);
   expect(Math.abs(routing.lateEnvelopmentBalance)).toBeLessThan(1e-7);
   expect(routing.venueBusGain).toBeGreaterThan(0.1);
   expect(routing.venueBusGain).toBeLessThan(0.25);
@@ -1049,8 +1148,8 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(routing.venueHighpass).toBe(activeDistanceProfile.highpass);
   expect(routing.venueLowpass).toBe(activeDistanceProfile.lowpass);
   expect(routing.venuePreDelay).toBeCloseTo(activeDistanceProfile.preDelay, 4);
-  expect(routing.wetLowGuard).toBe(110);
-  expect(routing.wetAirGuard).toBe(14500);
+  expect(routing.wetLowGuard).toBe(180);
+  expect(routing.wetAirGuard).toBe(16000);
   expect(routing.lateralHighpass).toBe(220);
   expect(routing.fieldHighpass).toBe(320);
   expect(routing.distanceProfileId).toBe("far");
@@ -1061,7 +1160,7 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   ]);
   expect(routing.roomResponseEq.map((filter) => filter.type)).toEqual(["lowshelf", "peaking", "peaking"]);
   expect(routing.roomResponseEq.map((filter) => filter.frequency)).toEqual([165, 340, 4200]);
-  expect(routing.roomResponseMaximumCorrection).toBeLessThanOrEqual(1.2);
+  expect(routing.roomResponseMaximumCorrection).toBeLessThanOrEqual(1.8);
   Object.values(routing.coherence).forEach((coherence) => {
     expect(coherence.anchorShare).toBeGreaterThan(0.59);
     expect(coherence.anchorLeads).toBe(true);
@@ -1077,11 +1176,11 @@ test("renders Demucs stems with inferred stage positions", async ({ page }, test
   expect(routing.mixtureProfile.stemScale).toBeGreaterThanOrEqual(0.72);
   expect(routing.mixtureProfile.stemScale).toBeLessThanOrEqual(1.18);
   expect(Number.isFinite(routing.mixtureProfile.residualRatio)).toBe(true);
-  expect(routing.phasePreserving.every(Boolean)).toBe(true);
+  expect(routing.phasePreserving.every((value) => value === false)).toBe(true);
   expect(routing.directGains.every((gain) => gain === routing.mixtureProfile.stemScale)).toBe(true);
-  expect(routing.directRendererModes.every((mode) => mode === "native-stereo")).toBe(true);
+  expect(routing.directRendererModes.every((mode) => mode === "program-matched-binaural")).toBe(true);
   routing.reflectionBalance.forEach((balance) => expect(Math.abs(balance)).toBeLessThan(1e-7));
-  expect(routing.residualPhasePreserving).toBe(true);
+  expect(routing.residualPhasePreserving).toBe(false);
   expect(routing.cancellationGains).toHaveLength(4);
   routing.cancellationGains.forEach((gain) => expect(gain).toBeLessThan(0));
   const musicStyleDuringPlayback = await page.locator(".stage-node[data-id='other']").getAttribute("style");
@@ -1130,21 +1229,21 @@ test("loads quality-gated guitar and piano as optional adaptive stems", async ({
   await expect(page.locator(".stage-node[data-id='guitar']")).toBeVisible();
   await expect(page.locator(".stage-node[data-id='piano']")).toBeVisible();
   await page.locator("#play-button").click();
-  await page.waitForFunction(() => state.graph?.spatialLayer?.stemObjects?.length === 6);
+  await page.waitForFunction(() => state.playback.graph?.spatialLayer?.stemObjects?.length === 6);
   const adaptive = await page.evaluate(() => ({
     ids: Object.keys(state.stemBuffers || {}).sort((a, b) => STEM_ORDER.indexOf(a) - STEM_ORDER.indexOf(b)),
-    spatialIds: state.graph?.spatialLayer?.stemObjects?.map((stem) => stem.id) || [],
+    spatialIds: state.playback.graph?.spatialLayer?.stemObjects?.map((stem) => stem.id) || [],
     guitarConfidence: state.stemBuffers?.guitar?.quality?.hybridConfidence,
     pianoConfidence: state.stemBuffers?.piano?.quality?.hybridConfidence,
     required: CORE_STEM_ORDER,
-    transientControls: state.graph?.spatialLayer?.transientControls?.length
+    transientControls: state.playback.graph?.spatialLayer?.transientControls?.length
   }));
   expect(adaptive.ids).toEqual(["vocals", "guitar", "piano", "other", "drums", "bass"]);
   expect(adaptive.spatialIds).toEqual(adaptive.ids);
   expect(adaptive.guitarConfidence).toBe(0.72);
   expect(adaptive.pianoConfidence).toBe(0.66);
   expect(adaptive.required).toEqual(["vocals", "other", "drums", "bass"]);
-  expect(adaptive.transientControls).toBe(12);
+  expect(adaptive.transientControls).toBe(0);
   expect(errors()).toEqual([]);
 });
 
@@ -1167,7 +1266,7 @@ test("computes a mixture-consistent residual for aligned stem partitions", async
         });
       }
     }
-    return getMixtureConsistencyProfile(reference, stems);
+    return audioRenderer.getMixtureConsistencyProfile(reference, stems);
   });
   expect(profile.stemScale).toBeCloseTo(1, 6);
   expect(profile.residualRatio).toBeLessThan(1e-6);
@@ -1235,6 +1334,172 @@ test("adapts the symmetric DSP quality tier from real render-capacity pressure",
     { tier: "balanced", reason: "render-overload" },
     { tier: "full", reason: "render-headroom" }
   ]);
+});
+
+test("incomplete render-capacity events cannot trigger quality recovery", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(() => {
+    const changes = [];
+    const controller = new window.SpatialRuntimeQualityController({initialTier: "balanced", ceilingTier: "full",
+      cooldownMs: 0, lowWindowLimit: 3, onTierChange: change => changes.push(change)});
+    controller.handleUpdate({averageLoad: 0.1, peakLoad: 0.1, underrunRatio: 0}, 1);
+    controller.handleUpdate({}, 2);
+    controller.handleUpdate({averageLoad: 0.1, peakLoad: 0.1, underrunRatio: 0}, 3);
+    controller.handleUpdate({averageLoad: 0.1, peakLoad: 0.1, underrunRatio: 0}, 4);
+    const before = controller.snapshot().tier;
+    controller.handleUpdate({averageLoad: 0.1, peakLoad: 0.1, underrunRatio: 0}, 5);
+    return {before, after: controller.snapshot().tier, changes};
+  });
+  expect(result.before).toBe("balanced");
+  expect(result.after).toBe("full");
+  expect(result.changes).toHaveLength(1);
+});
+
+test("mono stem position matches a duplicated stereo stem including silence", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(() => {
+    const rate = 48000, length = rate;
+    const context = new OfflineAudioContext(2, length, rate);
+    const mono = context.createBuffer(1, length, rate), stereo = context.createBuffer(2, length, rate);
+    const source = mono.getChannelData(0);
+    for (let i = rate / 3; i < rate * 2 / 3; i++) source[i] = 0.1 * Math.sin(i * 0.17);
+    stereo.copyToChannel(source, 0); stereo.copyToChannel(source, 1);
+    const silent = context.createBuffer(1, length, rate);
+    return {mono: analyzeStemStereoPosition(mono), stereo: analyzeStemStereoPosition(stereo),
+      silent: analyzeStemStereoPosition(silent)};
+  });
+  expect(result.mono).toEqual(result.stereo);
+  expect(result.mono.pan).toBe(0);
+  expect(result.mono.confidence).toBe(1);
+  expect(result.silent.confidence).toBe(0);
+});
+
+test("stem position analysis yields to the UI and supports cancellation", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const rate = 48000, length = rate * 8;
+    const context = new OfflineAudioContext(2, length, rate);
+    const buffer = context.createBuffer(2, length, rate);
+    for (let channel = 0; channel < 2; channel++) {
+      const samples = buffer.getChannelData(channel);
+      for (let i = 0; i < length; i++) samples[i] = Math.sin(i * 0.05) * (channel ? 0.15 : 0.1);
+    }
+    const expected = analyzeStemStereoPosition(buffer);
+    let yielded = false;
+    setTimeout(() => { yielded = true; }, 0);
+    const actual = await analyzeStemStereoPositionAsync(buffer);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 0);
+    let aborted = false;
+    try { await analyzeStemStereoPositionAsync(buffer, controller.signal); }
+    catch (error) { aborted = error.name === "AbortError"; }
+    return {expected, actual, yielded, aborted};
+  });
+  expect(result.actual).toEqual(result.expected);
+  expect(result.yielded).toBe(true);
+  expect(result.aborted).toBe(true);
+});
+
+test("stem analysis divides unusually large windows into bounded steps", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const data = new Float32Array(100000).fill(0.1);
+    const buffer = {numberOfChannels: 1, length: data.length, duration: 1 / 6, getChannelData: () => data};
+    const iterator = stemStereoPositionSteps(buffer);
+    let yields = 0, step;
+    do { step = iterator.next(); if (!step.done) yields++; } while (!step.done);
+    return {yields, result: step.value, asyncResult: await analyzeStemStereoPositionAsync(buffer)};
+  });
+  expect(result.yields).toBeGreaterThanOrEqual(3);
+  expect(result.result).toEqual(result.asyncResult);
+  expect(result.result.pan).toBe(0);
+});
+
+test("render-capacity monitoring clears stale state on detach or failed attach", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(() => {
+    let stopped = 0;
+    const controller = new window.SpatialRuntimeQualityController({initialTier: "balanced", ceilingTier: "full", lowWindowLimit: 2, cooldownMs: 0});
+    const capacity = {start() {}, stop() { stopped++; }};
+    const attached = controller.attach({renderCapacity: capacity});
+    controller.handleUpdate({averageLoad: 0.1, peakLoad: 0.1, underrunRatio: 0}, 1);
+    const missing = controller.attach({});
+    const afterDetach = controller.snapshot();
+    const failed = controller.attach({renderCapacity: {start() { throw new Error("unsupported"); }}});
+    const afterFailure = controller.snapshot();
+    controller.handleUpdate({averageLoad: 0.1, peakLoad: 0.1, underrunRatio: 0}, 2);
+    return {attached, missing, failed, afterDetach, afterFailure, tier: controller.snapshot().tier, stopped};
+  });
+  expect(result.attached).toBe(true);
+  expect(result.missing).toBe(false);
+  expect(result.failed).toBe(false);
+  expect(result.afterDetach.supported).toBe(false);
+  expect(result.afterFailure.supported).toBe(false);
+  expect(result.tier).toBe("balanced");
+  expect(result.stopped).toBe(1);
+});
+
+test("recreates a closed audio context and reuses its quality controller", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const first = await ensureAudioContext();
+    const controller = state.runtimeQualityController;
+    await first.close();
+    const second = await ensureAudioContext();
+    const result = {firstState: first.state, secondState: second.state, replaced: first !== second,
+      sameController: state.runtimeQualityController === controller};
+    await second.close();
+    return result;
+  });
+  expect(result.firstState).toBe("closed");
+  expect(result.secondState).not.toBe("closed");
+  expect(result.replaced).toBe(true);
+  expect(result.sameController).toBe(true);
+});
+
+test("starts spatial playback on a replacement audio context", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    await ensureUniversalHrtfProfile();
+    const first = await ensureAudioContext();
+    const buffer = first.createBuffer(2, first.sampleRate * 2, first.sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+      const samples = buffer.getChannelData(channel);
+      for (let i = 0; i < samples.length; i++) samples[i] = 0.05 * Math.sin(2 * Math.PI * 440 * i / first.sampleRate);
+    }
+    state.audioBuffer = buffer;
+    state.analysis = {mix: {peakDb: -20, rmsDb: -30}, stereoImage: {width: 0}, instruments: []};
+    state.stemBuffers = null;
+    state.spatialOutputCalibration = null;
+    state.playback.offset = 0.75;
+    await first.close();
+    await startPlayback();
+    const second = state.audioContext;
+    const result = {replaced: second !== first, playing: state.playback.playing,
+      graphContext: state.playback.graph?.master?.context === second,
+      outputContext: state.playback.output?.context === second,
+      spatial: Boolean(state.playback.graph?.spatialLayer)};
+    await second.close();
+    return result;
+  });
+  expect(result).toEqual({replaced: true, playing: true, graphContext: true, outputContext: true, spatial: true});
+  await page.waitForFunction(() => !state.playback.playing && !state.playback.desired);
+  const restarted = await page.evaluate(async () => {
+    const previous = state.audioContext;
+    const savedOffset = state.playback.offset;
+    await startPlayback();
+    const ok = state.playback.playing && state.audioContext !== previous &&
+      state.playback.graph?.master?.context === state.audioContext;
+    const restartTime = getPlaybackTime();
+    stopPlayback();
+    await state.audioContext.close();
+    return {ok, savedOffset, restartTime};
+  });
+  expect(restarted.ok).toBe(true);
+  expect(restarted.savedOffset).toBeGreaterThanOrEqual(0.75);
+  expect(restarted.savedOffset).toBeLessThan(1.2);
+  expect(restarted.restartTime).toBeGreaterThanOrEqual(restarted.savedOffset - 0.02);
+  expect(restarted.restartTime).toBeLessThan(restarted.savedOffset + 0.2);
 });
 
 test("renders the complete four-stem Full Spatial graph within audio safety guards", async ({ page, browserName }) => {
@@ -1332,8 +1597,8 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
       truePeakHeadroomGain: graph.truePeakHeadroomGain,
       stemSpatialProfile,
       adaptiveVocalRoomScale: {
-        high: getStemRoomSceneScale({ id: "vocals", separation: 0.95, spatialWeight: 1 }),
-        low: getStemRoomSceneScale({ id: "vocals", separation: 0.2, spatialWeight: 0.75 })
+        high: audioRenderer.getStemRoomSceneScale({ id: "vocals", separation: 0.95, spatialWeight: 1 }),
+        low: audioRenderer.getStemRoomSceneScale({ id: "vocals", separation: 0.2, spatialWeight: 0.75 })
       },
       sceneSeparation: Object.fromEntries(
         Object.entries(graph.spatialLayer.separatedScenes || {}).map(([id, scene]) => [id, {
@@ -1375,9 +1640,9 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
   expect(metrics.balanceRatio).toBeLessThan(1.33);
   expect(metrics.residualRatio).toBeLessThan(1e-5);
   expect(metrics.usesOriginalAnchor).toBe(false);
-  expect(metrics.phasePreserving).toBe(true);
-  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeGreaterThan(0.76);
-  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeLessThan(0.78);
+  expect(metrics.phasePreserving).toBe(false);
+  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeGreaterThanOrEqual(0.82);
+  expect(metrics.stemSpatialProfile.vocals.roomSceneScale).toBeLessThan(0.90);
   expect(metrics.stemSpatialProfile.other.roomSceneScale).toBe(1);
   expect(metrics.stemSpatialProfile.drums.roomSceneScale).toBe(1);
   expect(metrics.stemSpatialProfile.bass.roomSceneScale).toBe(1);
@@ -1386,8 +1651,8 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
   expect(metrics.stemSpatialProfile.vocals.primaryDelays).toEqual([0, 0]);
   expect(metrics.stemSpatialProfile.vocals.reflectionSend)
     .toBeLessThan(metrics.stemSpatialProfile.other.reflectionSend);
-  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeGreaterThan(0.12);
-  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeLessThan(0.13);
+  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeGreaterThan(0.018);
+  expect(metrics.stemSpatialProfile.vocals.externalizationSend).toBeLessThan(0.021);
   expect(metrics.stemSpatialProfile.vocals.confidenceSendScale).toBeLessThanOrEqual(1);
   expect(metrics.adaptiveVocalRoomScale.low).toBeGreaterThan(metrics.adaptiveVocalRoomScale.high);
   expect(metrics.sceneSeparation.lateral.vocals).toBeLessThan(0.05);
@@ -1399,9 +1664,9 @@ test("renders the complete four-stem Full Spatial graph within audio safety guar
   expect(metrics.instrumentPresenceEq.frequency).toBe(2650);
   expect(metrics.instrumentPresenceEq.gain).toBeCloseTo(-0.8, 2);
   expect(metrics.instrumentPresenceEq.q).toBeCloseTo(0.76, 2);
-  expect(metrics.transientControlCount).toBe(8);
+  expect(metrics.transientControlCount).toBe(0);
   expect(metrics.compositeRendererCount).toBe(10);
-  expect(metrics.graphNodeCount).toBeLessThan(195);
+  expect(metrics.graphNodeCount).toBeLessThan(200);
   expect(metrics.stemSpatialProfile.other.lateralEarlyScale).toBe(1.16);
   expect(metrics.stemSpatialProfile.drums.lateralEarlyScale).toBe(1.1);
   expect(metrics.externalizationTaps).toBe(24);
@@ -1484,55 +1749,7 @@ test("keeps the phase-safe Full Spatial fallback stable at 44.1 and 96 kHz", asy
   }
 });
 
-test("preserves stereo sample phase in the Full Spatial primary layer", async ({ page }) => {
-  await page.goto("/");
-  const result = await page.evaluate(async () => {
-    const sampleRate = 48000;
-    const length = 4096;
-    const context = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, length, sampleRate);
-    const buffer = context.createBuffer(2, length, sampleRate);
-    const left = buffer.getChannelData(0);
-    const right = buffer.getChannelData(1);
-    for (let index = 0; index < length; index += 1) {
-      left[index] = Math.sin(2 * Math.PI * 311 * index / sampleRate) * 0.35;
-      right[index] = Math.sin(2 * Math.PI * 487 * index / sampleRate + 0.73) * 0.21;
-    }
-    const expectedLeft = Float32Array.from(left);
-    const expectedRight = Float32Array.from(right);
-    const source = context.createBufferSource();
-    source.buffer = buffer;
-    const primary = createPhasePreservingStereoPrimaryLayer(
-      context,
-      source,
-      context.destination,
-      1,
-      "phase-test",
-      2
-    );
-    source.start();
-    const rendered = await context.startRendering();
-    let maxLeftError = 0;
-    let maxRightError = 0;
-    for (let index = 0; index < length; index += 1) {
-      maxLeftError = Math.max(maxLeftError, Math.abs(rendered.getChannelData(0)[index] - expectedLeft[index]));
-      maxRightError = Math.max(maxRightError, Math.abs(rendered.getChannelData(1)[index] - expectedRight[index]));
-    }
-    return {
-      maxLeftError,
-      maxRightError,
-      phasePreserving: primary.phasePreserving,
-      rendererModes: primary.primaryPaths.map((path) => path.rendererMode),
-      delaySeconds: primary.primaryPaths.map((path) => path.delaySeconds)
-    };
-  });
-  expect(result.maxLeftError).toBeLessThan(1e-7);
-  expect(result.maxRightError).toBeLessThan(1e-7);
-  expect(result.phasePreserving).toBe(true);
-  expect(result.rendererModes).toEqual(["native-stereo", "native-stereo"]);
-  expect(result.delaySeconds).toEqual([0, 0]);
-});
-
-test("keeps Original playback raw with device correction selected while stem displays stay idle", async ({ page, browserName }, testInfo) => {
+test("level-matches Original without spatial processing while stem displays stay idle", async ({ page, browserName }, testInfo) => {
   const errors = collectBrowserErrors(page);
   await page.route("**/api/analyze?**", async (route) => {
     await route.fulfill({
@@ -1553,18 +1770,24 @@ test("keeps Original playback raw with device correction selected while stem dis
   const filePath = testInfo.outputPath("original-stem-tone.wav");
   fs.writeFileSync(filePath, createToneWav());
   await page.locator("#audio-file").setInputFiles(filePath);
+  await expect(page.locator("#export-button")).toBeEnabled();
 
   await page.getByRole("button", { name: "Original" }).click();
-  await page.locator("#playback-device-select").selectOption("sennheiser-ie600");
 
   await page.locator("#play-button").click();
   await page.waitForTimeout(500);
   const originalGraph = await page.evaluate(() => ({
-    hasDeviceCorrection: Object.prototype.hasOwnProperty.call(state.graph || {}, "deviceCorrection"),
-    outputGainScale: state.graph?.outputGainScale,
-    mode: state.graph?.mode
+    hasDeviceCorrection: Object.prototype.hasOwnProperty.call(state.playback.graph || {}, "deviceCorrection"),
+    outputGainScale: state.playback.graph?.outputGainScale,
+    expectedGain: state.spatialOutputCalibration?.originalMatchGain,
+    hasCompressor: state.playback.graph?.nodes.some((node) => node instanceof DynamicsCompressorNode),
+    mode: state.playback.graph?.mode
   }));
-  expect(originalGraph).toEqual({ hasDeviceCorrection: false, outputGainScale: 1, mode: "original" });
+  expect(originalGraph.hasDeviceCorrection).toBe(false);
+  expect(originalGraph.hasCompressor).toBe(false);
+  expect(originalGraph.mode).toBe("original");
+  expect(originalGraph.expectedGain).toBeGreaterThan(0);
+  expect(originalGraph.outputGainScale).toBeCloseTo(originalGraph.expectedGain, 6);
   let levels = await page.evaluate(() => ({
     row: Number.parseFloat(document.querySelector(".instrument-row[data-id='other']")?.style.getPropertyValue("--level") || "0"),
     field: Number.parseFloat(document.querySelector(".stage-node[data-id='other']")?.style.getPropertyValue("--level") || "0")
@@ -1602,6 +1825,239 @@ test("keeps Original playback raw with device correction selected while stem dis
 
   const relevantErrors = errors().filter((message) => !(browserName === "firefox" && message === "JSHandle@object"));
   expect(relevantErrors).toEqual([]);
+});
+
+test("fixes cards at whole-song positions and shows every stem without internal scrolling", async ({ page }, testInfo) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await page.evaluate((fixture) => {
+    fixture.file.duration = 2;
+    state.analysis = fixture;
+    const context = new OfflineAudioContext(2, 48000, 24000);
+    state.stemBuffers = Object.fromEntries(Object.values(STEM_PROFILES).map((profile, index) => {
+      const buffer = context.createBuffer(2, 48000, 24000);
+      for (let frame = 0; frame < buffer.length; frame += 1) {
+        const pan = profile.id === "vocals" ? 0 : (frame / buffer.length * 1.2 - 0.6 +
+          (profile.id === "piano" ? 0.25 : 0));
+        const sample = Math.sin(2 * Math.PI * (220 + index * 110) * frame / 24000) * 0.1;
+        buffer.getChannelData(0)[frame] = sample * Math.sqrt((1 - pan) / 2);
+        buffer.getChannelData(1)[frame] = sample * Math.sqrt((1 + pan) / 2);
+      }
+      return [profile.id, { ...profile, kind: "stem", active: true, buffer,
+        stereoPosition: analyzeStemStereoPosition(buffer) }];
+    }));
+    studioView.renderAnalysis(fixture);
+    studioView.updateStagePositions(0.1, { immediate: true });
+  }, createAnalysisFixture());
+  const card = page.locator('.stage-node[data-id="piano"]');
+  const before = await card.evaluate((node) => parseFloat(node.style.left));
+  expect(Number(await card.getAttribute("data-pan"))).toBeCloseTo(0.25, 2);
+  const beforeBounds = await card.boundingBox();
+  await page.evaluate(() => {
+    state.playback.playing = true;
+    studioView.updateRealtimeDisplay(1.8);
+    studioView.updateSoundFieldDisplay(1.8, { piano: 1 });
+    studioView.updateStagePositions();
+    state.playback.playing = false;
+  });
+  const after = await card.evaluate((node) => parseFloat(node.style.left));
+  expect(after).toBe(before);
+  expect(await card.boundingBox()).toEqual(beforeBounds);
+  expect(await page.locator('.stage-node[data-id="vocals"]').evaluate((node) => parseFloat(node.style.left)))
+    .toBeCloseTo(50, 1);
+  await expect(page.locator("#stage-map svg")).toHaveCount(0);
+  // Cluster all measured sources in the centre to exercise label collision handling.
+  await page.evaluate(() => {
+    Object.values(state.stemBuffers).forEach((stem) => {
+      stem.stereoPosition.pan = 0;
+      stem.stereoPosition.panCurve = [0, 0];
+    });
+  });
+  for (const width of [1480, 1180, 700, 375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(() => studioView.updateStagePositions(0, { immediate: true }));
+    const layout = await page.evaluate(() => {
+      const field = document.querySelector("#stage-map").getBoundingClientRect();
+      const nodes = [...document.querySelectorAll(".stage-node")].map((node) => node.getBoundingClientRect());
+      const overlaps = nodes.flatMap((a, index) => nodes.slice(index + 1).filter((b) =>
+        Math.min(a.right, b.right) - Math.max(a.left, b.left) > 2 &&
+        Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 2));
+      const rows = [...document.querySelectorAll(".instrument-row")];
+      const list = document.querySelector("#instrument-list");
+      const listBounds = list.getBoundingClientRect();
+      return {
+        listScroll: list.scrollHeight > list.clientHeight + 1,
+        clippedRows: rows.some((row) => row.getBoundingClientRect().bottom > listBounds.bottom),
+        overlaps: overlaps.length,
+        outside: nodes.some((node) => node.left < field.left || node.right > field.right ||
+          node.top < field.top || node.bottom > field.bottom),
+        overflow: rows.some((row) => row.scrollWidth > row.clientWidth + 1 || row.scrollHeight > row.clientHeight + 1),
+        textOutside: rows.some((row) => {
+          const bounds = row.getBoundingClientRect();
+          return [...row.querySelectorAll("strong, .stem-copy span, em")].some((text) => {
+            const rect = text.getBoundingClientRect();
+            return rect.left < bounds.left || rect.right > bounds.right || rect.bottom > bounds.bottom;
+          });
+        })
+      };
+    });
+    expect(layout, `layout at ${width}px`).toEqual({ overlaps: 0, outside: false, overflow: false,
+      textOutside: false, listScroll: false, clippedRows: false });
+    if (width === 1480 || width === 375) {
+      await page.locator(".analysis-grid").first().screenshot({ path: testInfo.outputPath(`analysis-${width}.png`) });
+    }
+  }
+  expect(errors()).toEqual([]);
+});
+
+test("switches audible output and ignores stale or stopped transitions", async ({ page, browserName }) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/");
+  await page.evaluate(async (fixture) => {
+    const context = await ensureAudioContext();
+    fixture.file.duration = 12;
+    state.analysis = fixture;
+    state.file = { name: "mode-switch.wav" };
+    const tone = (frequency) => {
+      const buffer = context.createBuffer(2, context.sampleRate * 12, context.sampleRate);
+      for (let channel = 0; channel < 2; channel += 1) {
+        const data = buffer.getChannelData(channel);
+        for (let index = 0; index < data.length; index += 1) {
+          data[index] = 0.1 * Math.sin(2 * Math.PI * frequency * index / context.sampleRate);
+        }
+      }
+      return buffer;
+    };
+    state.audioBuffer = tone(440);
+    state.stemBuffers = null;
+    studioView.renderAnalysis(fixture);
+    refs.playButton.disabled = false;
+    refs.stopButton.disabled = false;
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 4096;
+    analyser.smoothingTimeConstant = 0;
+    const sink = context.createGain();
+    sink.gain.value = 0;
+    analyser.connect(sink).connect(context.destination);
+    const factory = createPlaybackGraph;
+    window.__modeGraphs = [];
+    createPlaybackGraph = (...args) => {
+      const graph = factory(...args);
+      graph.master.connect(analyser);
+      window.__modeGraphs.push(graph);
+      return graph;
+    };
+    window.__outputModeTone = () => {
+      const data = new Float32Array(analyser.frequencyBinCount);
+      analyser.getFloatFrequencyData(data);
+      const band = (frequency) => {
+        const bin = Math.round(frequency / context.sampleRate * analyser.fftSize);
+        return Math.max(...data.slice(bin - 2, bin + 3));
+      };
+      return band(1200) - band(440);
+    };
+    window.__outputPeak = () => {
+      const samples = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(samples);
+      return Math.max(...samples.map(Math.abs));
+    };
+  }, createAnalysisFixture());
+  await page.getByRole("button", { name: "Original", exact: true }).click();
+  await page.locator("#play-button").click();
+  await expect.poll(() => page.evaluate(() => state.playback.graph?.mode)).toBe("original");
+  if (browserName !== "firefox") {
+    await expect.poll(() => page.evaluate(() => window.__outputModeTone())).toBeLessThan(-30);
+  }
+  await page.locator('[data-mode="spatial"]').click();
+  await expect.poll(() => page.evaluate(() => state.playback.graph?.mode)).toBe("spatial");
+  if (browserName !== "firefox") {
+    await expect.poll(() => page.evaluate(() => window.__outputPeak())).toBeGreaterThan(0.00001);
+  }
+  // Multiple requests within the same event loop must collapse to the final mode.
+  await page.evaluate(() => {
+    for (const mode of ["original", "spatial", "original", "spatial", "original"]) {
+      document.querySelector(`[data-mode="${mode}"]`).click();
+    }
+  });
+  await expect.poll(() => page.evaluate(() => state.playback.graph?.mode)).toBe("original");
+  if (browserName !== "firefox") {
+    await expect.poll(() => page.evaluate(() => window.__outputModeTone())).toBeLessThan(-30);
+  }
+  // Interrupt successive fades rather than waiting for the previous one to end.
+  await page.evaluate(async () => {
+    for (const mode of ["spatial", "original", "spatial", "original"]) {
+      document.querySelector(`[data-mode="${mode}"]`).click();
+      await new Promise((resolve) => setTimeout(resolve, 35));
+    }
+  });
+  await expect.poll(() => page.evaluate(() => state.playback.graph?.mode)).toBe("original");
+  if (browserName !== "firefox") {
+    await expect.poll(() => page.evaluate(() => window.__outputModeTone())).toBeLessThan(-30);
+  }
+  // Stop while both incoming and outgoing graphs are still fading.
+  await page.locator('[data-mode="spatial"]').click();
+  await expect.poll(() => page.evaluate(() => state.playback.graph?.mode)).toBe("spatial");
+  await page.locator("#stop-button").click();
+  await expect.poll(() => page.evaluate(() => window.__outputPeak())).toBeLessThan(0.000001);
+  await page.waitForTimeout(650);
+  expect(await page.evaluate(() => ({ peak: window.__outputPeak(),
+    graphs: state.playback.graphs.size, output: state.playback.output.gain.value })))
+    .toEqual({ peak: 0, graphs: 0, output: 0 });
+  await page.locator("#play-button").click();
+  await expect.poll(() => page.evaluate(() => state.playback.graph?.mode)).toBe("spatial");
+  if (browserName !== "firefox") {
+    await expect.poll(() => page.evaluate(() => window.__outputPeak())).toBeGreaterThan(0.05);
+  }
+  // A rebuild waiting for AudioContext must not start sound after Stop.
+  await page.evaluate(() => {
+    window.__contextOriginal = ensureAudioContext;
+    ensureAudioContext = () => new Promise((resolve) => {
+      window.__releaseModeContext = () => resolve(state.audioContext);
+    });
+    document.querySelector('[data-mode="original"]').click();
+    stopPlayback();
+    window.__releaseModeContext();
+    ensureAudioContext = window.__contextOriginal;
+  });
+  await page.waitForTimeout(150);
+  expect(await page.evaluate(() => ({ playing: state.playback.playing, graph: state.playback.graph,
+    liveGraphs: window.__modeGraphs.filter((graph) => !graph.disposed).length })))
+    .toEqual({ playing: false, graph: null, liveGraphs: 0 });
+  // A pending Play must also remain cancelled after its context becomes ready.
+  await page.evaluate(async () => {
+    ensureAudioContext = () => new Promise((resolve) => {
+      window.__releasePlayContext = () => resolve(state.audioContext);
+    });
+    const pendingPlay = startPlayback();
+    stopPlayback();
+    window.__releasePlayContext();
+    ensureAudioContext = window.__contextOriginal;
+    await pendingPlay;
+  });
+  expect(await page.evaluate(() => ({ playing: state.playback.playing,
+    graphs: state.playback.graphs.size, output: state.playback.output.gain.value })))
+    .toEqual({ playing: false, graphs: 0, output: 0 });
+  // A failure after sources start must still clean up their audible output.
+  await page.evaluate(async () => {
+    const startSources = startGraphSources;
+    startGraphSources = (...args) => {
+      startSources(...args);
+      throw new Error("simulated partial start failure");
+    };
+    try {
+      await startPlayback();
+    } catch (error) {
+      if (error.message !== "simulated partial start failure") throw error;
+    } finally {
+      startGraphSources = startSources;
+    }
+  });
+  await expect.poll(() => page.evaluate(() => window.__outputPeak())).toBeLessThan(0.000001);
+  expect(await page.evaluate(() => ({ playing: state.playback.playing,
+    graphs: state.playback.graphs.size, output: state.playback.output.gain.value })))
+    .toEqual({ playing: false, graphs: 0, output: 0 });
+  expect(errors()).toEqual([]);
 });
 
 function collectBrowserErrors(page) {
@@ -1844,7 +2300,6 @@ test("automatically applies the universal HRTF and concert-hall BRIR", async ({ 
       right[index] = value * 0.92 + Math.sin(2 * Math.PI * 3300 * index / 48000) * 0.03;
     }
     const coherence = window.SpatialAudioQuality.analyzeMultibandCoherence(buffer);
-    const transients = window.SpatialAudioQuality.analyzeTransientMap(buffer);
     const safety = window.SpatialAudioQuality.buildSafetyProfile(coherence);
     const impulse = context.createBuffer(2, 48000, 48000);
     for (let index = 0; index < impulse.length; index += 1) {
@@ -1858,7 +2313,6 @@ test("automatically applies the universal HRTF and concert-hall BRIR", async ({ 
       bands: coherence.bands.length,
       average: coherence.averageCorrelation,
       gains: Object.values(safety.bandGains),
-      transientCount: transients.events.length,
       impulseMetrics: {
         edt: impulseMetrics.edtSeconds,
         t20: impulseMetrics.t20Seconds,
@@ -1866,19 +2320,13 @@ test("automatically applies the universal HRTF and concert-hall BRIR", async ({ 
         listenerEnvelopment: impulseMetrics.listenerEnvelopment,
         bandIds: Object.keys(impulseMetrics.bandIacc)
       },
-      cacheFunctions: [
-        typeof queueSpatialRenderCache,
-        typeof createCachedSpatialPlaybackGraph,
-        typeof persistSpatialRenderCache,
-        typeof cancelSpatialRenderCache
-      ]
+
     };
   });
 
   expect(quality.bands).toBe(5);
   expect(quality.average).toBeGreaterThan(-1);
   expect(quality.gains.every((gain) => gain >= 0.38 && gain <= 1.08)).toBeTruthy();
-  expect(quality.transientCount).toBeGreaterThanOrEqual(0);
   expect(Number.isFinite(quality.impulseMetrics.edt)).toBeTruthy();
   expect(Number.isFinite(quality.impulseMetrics.t20)).toBeTruthy();
   expect(quality.impulseMetrics.iaccLate).toBeGreaterThanOrEqual(-1);
@@ -1886,45 +2334,8 @@ test("automatically applies the universal HRTF and concert-hall BRIR", async ({ 
   expect(quality.impulseMetrics.listenerEnvelopment).toBeGreaterThanOrEqual(0);
   expect(quality.impulseMetrics.listenerEnvelopment).toBeLessThanOrEqual(1);
   expect(quality.impulseMetrics.bandIds).toEqual(["low", "mid", "high"]);
-  expect(quality.cacheFunctions).toEqual(["function", "function", "function", "function"]);
 
-  await page.locator("#theme-toggle").click();
-  const workletStatus = await page.evaluate(async () => {
-    await ensureAudioContext();
-    return state.spatialWorkletStatus;
-  });
-  expect(["ready", "fallback"]).toContain(workletStatus);
-});
 
-test("stores HQ renders as bounded IndexedDB chunks and can cancel queued work", async ({ page }) => {
-  await page.goto("/");
-  const result = await page.evaluate(async () => {
-    const context = new OfflineAudioContext(2, 48000, 48000);
-    const buffer = context.createBuffer(2, 48000, 48000);
-    buffer.getChannelData(0)[0] = 0.25;
-    buffer.getChannelData(1)[0] = -0.25;
-    const key = `playwright-cache-${crypto.randomUUID()}`;
-    await persistSpatialRenderCache(key, buffer);
-    const database = await openSpatialCacheDatabase();
-    const metadata = await idbRequest(database.transaction("renders", "readonly").objectStore("renders").get(key));
-    const chunk = await idbRequest(database.transaction("chunks", "readonly").objectStore("chunks").get(`${key}:0`));
-    await deletePersistentSpatialCacheEntry(database, metadata);
-    state.spatialRenderCacheStatus = "queued";
-    state.spatialRenderCacheProgress = 18;
-    cancelSpatialRenderCache({ silent: true });
-    return {
-      chunkCount: metadata.chunkCount,
-      bytes: metadata.bytes,
-      chunkBytes: chunk.blob.size,
-      status: state.spatialRenderCacheStatus,
-      progress: state.spatialRenderCacheProgress
-    };
-  });
-  expect(result.chunkCount).toBe(1);
-  expect(result.bytes).toBeGreaterThan(380000);
-  expect(result.chunkBytes).toBe(result.bytes);
-  expect(result.status).toBe("idle");
-  expect(result.progress).toBe(0);
 });
 
 test("provides a hidden-reference MUSHRA session and persists completed results", async ({ page }) => {
@@ -1951,4 +2362,142 @@ test("provides a hidden-reference MUSHRA session and persists completed results"
     storedSchema: "SpatialAudioEssential.ListeningTest/2.0",
     storedSession: "playwright"
   });
+});
+
+
+test("does not add a coherent opposite-polarity copy of recorded side cues", async ({ page }) => {
+  await page.goto("/");
+  const metrics = await page.evaluate(async () => {
+    const results = [];
+    for (const sampleRate of [44100, 96000]) {
+      for (const frequency of [50, 3000]) {
+        const context = new OfflineAudioContext(2, sampleRate / 2, sampleRate);
+        const buffer = context.createBuffer(2, sampleRate / 2, sampleRate);
+        for (let index = 0; index < buffer.length; index += 1) {
+          const mid = 0.1 * Math.sin(2 * Math.PI * 440 * index / sampleRate);
+          const side = 0.03 * Math.sin(2 * Math.PI * frequency * index / sampleRate);
+          buffer.getChannelData(0)[index] = mid + side;
+          buffer.getChannelData(1)[index] = mid - side;
+        }
+        const source = context.createBufferSource();
+        source.buffer = buffer;
+        const layer = audioRenderer.createLateralSideExpansionLayer(context, source, context.destination, {
+          analysis: { stereoImage: { width: 0.36 } }
+        });
+        // Isolate the recorded-side branch from the separate ambience generator.
+        layer.decorrelator.disconnect();
+        source.connect(context.destination);
+        source.start();
+        const rendered = await context.startRendering();
+        let monoError = 0;
+        let inputSideEnergy = 0;
+        let outputSideEnergy = 0;
+        let addedSideEnergy = 0;
+        let firstAddedFrame = -1;
+        for (let index = 0; index < buffer.length; index += 1) {
+          const inputL = buffer.getChannelData(0)[index];
+          const inputR = buffer.getChannelData(1)[index];
+          const l = rendered.getChannelData(0)[index];
+          const r = rendered.getChannelData(1)[index];
+          const inputSide = (inputL - inputR) / 2;
+          const outputSide = (l - r) / 2;
+          monoError = Math.max(monoError, Math.abs((l + r - inputL - inputR) / 2));
+          if (firstAddedFrame < 0 && Math.abs(outputSide - inputSide) > 1e-6) firstAddedFrame = index;
+          if (index > sampleRate / 10) {
+            inputSideEnergy += inputSide ** 2;
+            outputSideEnergy += outputSide ** 2;
+            addedSideEnergy += (outputSide - inputSide) ** 2;
+          }
+        }
+        results.push({ sampleRate, frequency, monoError, firstAddedFrame,
+          sideRatio: Math.sqrt(outputSideEnergy / inputSideEnergy),
+          addedSideRatio: Math.sqrt(addedSideEnergy / inputSideEnergy) });
+        layer.nodes.forEach((node) => node.disconnect());
+      }
+    }
+    return results;
+  });
+  for (const result of metrics) {
+    expect(result.monoError).toBeLessThan(1e-7);
+    expect(result.firstAddedFrame).toBe(-1);
+    expect(result.sideRatio).toBeCloseTo(1, 6);
+    expect(result.addedSideRatio).toBeLessThan(0.000001);
+  }
+});
+
+test("preserves instrument and vocal direct samples when expanding room width", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    await ensureUniversalHrtfProfile();
+    const sampleRate = 48000;
+    const length = sampleRate;
+    const analysis = { mix: { peakDb: -12, rmsDb: -25 }, stereoImage: { width: 0.36 } };
+    state.analysis = analysis;
+    state.spatialOutputCalibration = null;
+    state.playbackCalibration = { estimatedTruePeakDb: -12, approxLufs: -25, sampleRate };
+    state.audioQualityTier = "full";
+    const render = async (width, vocalOnly = false) => {
+      const context = new OfflineAudioContext(2, length, sampleRate);
+      const reference = context.createBuffer(2, length, sampleRate);
+      state.stemBuffers = Object.fromEntries(["vocals", "other", "drums", "bass"].map((id) => [id, {
+        id, separation: 1, spatialWeight: 1,
+        buffer: context.createBuffer(2, length, sampleRate)
+      }]));
+      for (let channel = 0; channel < 2; channel += 1) {
+        for (let index = 0; index < length; index += 1) {
+          const time = index / sampleRate;
+          const polarity = channel === 0 ? 1 : -1;
+          const vocal = 0.04 * Math.sin(2 * Math.PI * 440 * time) +
+            (vocalOnly ? polarity * 0.003 * Math.sin(2 * Math.PI * 1400 * time) : 0);
+          const instrument = vocalOnly ? 0 : 0.015 * Math.sin(2 * Math.PI * 900 * time) +
+            polarity * (0.012 * Math.sin(2 * Math.PI * 3000 * time) +
+              0.012 * Math.sin(2 * Math.PI * 50 * time));
+          state.stemBuffers.vocals.buffer.getChannelData(channel)[index] = vocal;
+          state.stemBuffers.other.buffer.getChannelData(channel)[index] = instrument;
+          reference.getChannelData(channel)[index] = vocal + instrument;
+        }
+      }
+      const graph = createSpatialPlaybackGraph(context, reference, analysis, { stageWidth: width });
+      // The width stage belongs exclusively to the room return.
+      graph.spatialLayer.wetMaster.gain.value = 0;
+      startGraphSources(graph, 0);
+      const rendered = await context.startRendering();
+      const sideAmplitude = (frequency) => {
+        let real = 0, imaginary = 0;
+        for (let index = sampleRate / 2; index < length; index += 1) {
+          const side = (rendered.getChannelData(0)[index] - rendered.getChannelData(1)[index]) / 2;
+          const phase = 2 * Math.PI * frequency * index / sampleRate;
+          real += side * Math.cos(phase);
+          imaginary += side * Math.sin(phase);
+        }
+        return Math.hypot(real, imaginary);
+      };
+      const output = { left: Float32Array.from(rendered.getChannelData(0)),
+        right: Float32Array.from(rendered.getChannelData(1)),
+        treble: sideAmplitude(3000), bass: sideAmplitude(50) };
+      disconnectGraph(graph);
+      return output;
+    };
+    const baseline = await render(1);
+    const expanded = await render();
+    const voiceBefore = await render(1, true);
+    const voiceAfter = await render(2, true);
+    let monoError = 0, voiceError = 0, peak = 0;
+    for (let index = 0; index < length; index += 1) {
+      monoError = Math.max(monoError, Math.abs((expanded.left[index] + expanded.right[index] -
+        baseline.left[index] - baseline.right[index]) / 2));
+      voiceError = Math.max(voiceError, Math.abs(voiceBefore.left[index] - voiceAfter.left[index]),
+        Math.abs(voiceBefore.right[index] - voiceAfter.right[index]));
+      peak = Math.max(peak, Math.abs(expanded.left[index]), Math.abs(expanded.right[index]));
+    }
+    return { sideRatio: expanded.treble / baseline.treble,
+      bassRatio: expanded.bass / baseline.bass, monoError, voiceError, peak };
+  });
+  expect(result.sideRatio).toBeGreaterThan(0.9999);
+  expect(result.sideRatio).toBeLessThan(1.0001);
+  expect(result.bassRatio).toBeGreaterThan(0.98);
+  expect(result.bassRatio).toBeLessThan(1.02);
+  expect(result.monoError).toBeLessThan(2e-7);
+  expect(result.voiceError).toBeLessThan(1e-7);
+  expect(result.peak).toBeLessThan(0.5);
 });

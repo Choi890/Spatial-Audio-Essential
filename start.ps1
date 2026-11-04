@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$NoBrowser
 )
 
@@ -15,6 +15,17 @@ if (-not $versionMatch.Success) {
     throw "app.py에서 APP_VERSION을 확인할 수 없습니다."
 }
 $expectedVersion = $versionMatch.Groups["version"].Value
+$backendFiles = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "backend") -Filter "*.py" -File | Sort-Object Name)
+$codeFiles = @((Get-Item -LiteralPath $appSourcePath)) + $backendFiles
+$fileHashes = @($codeFiles | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash })
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $fingerprintBytes = $sha256.ComputeHash([System.Text.Encoding]::ASCII.GetBytes(($fileHashes -join "|")))
+    $expectedFingerprint = ([System.BitConverter]::ToString($fingerprintBytes) -replace "-", "").ToLowerInvariant()
+}
+finally {
+    $sha256.Dispose()
+}
 $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 $logDirectory = Join-Path $PSScriptRoot "data\logs"
 $serverOutputLog = Join-Path $logDirectory "launcher-server.out.log"
@@ -24,7 +35,9 @@ function Test-SpatialAudioServer {
     try {
         $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2
         $health = $response.Content | ConvertFrom-Json
-        return $response.StatusCode -eq 200 -and $health.version -eq $expectedVersion
+        return $response.StatusCode -eq 200 -and $health.version -eq $expectedVersion -and `
+            $health.service -eq "Spatial Audio Essential" -and $health.serverRoot -eq $PSScriptRoot -and `
+            $health.serverCodeFingerprint -eq $expectedFingerprint
     }
     catch {
         return $false
@@ -45,8 +58,23 @@ if (Test-SpatialAudioServer) {
 $staleListener = Get-NetTCPConnection -LocalPort 8768 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($staleListener) {
     $staleProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($staleListener.OwningProcess)"
-    $isProjectServer = $staleProcess.CommandLine -match "uvicorn\s+app:app" -and $staleProcess.CommandLine -match "8768"
-    if (-not $isProjectServer) {
+    $isUvicorn = $staleProcess.CommandLine -match "uvicorn\s+app:app" -and $staleProcess.CommandLine -match "8768"
+    $sameProject = $false
+    try {
+        $existingHealth = (Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2).Content | ConvertFrom-Json
+        $sameProject = $existingHealth.service -eq "Spatial Audio Essential" -and $existingHealth.serverRoot -eq $PSScriptRoot
+    }
+    catch {
+        # Older app versions did not identify their project in the health response.
+    }
+    if (-not $sameProject) {
+        # The Windows venv launcher is the parent of its underlying Python process.
+        $parentProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($staleProcess.ParentProcessId)" -ErrorAction SilentlyContinue
+        $venvPattern = [regex]::Escape($venvPython)
+        $sameProject = ($staleProcess.CommandLine -match $venvPattern) -or `
+            ($parentProcess -and $parentProcess.CommandLine -match $venvPattern -and $parentProcess.CommandLine -match "uvicorn\s+app:app")
+    }
+    if (-not ($isUvicorn -and $sameProject)) {
         throw "포트 8768을 다른 프로그램이 사용 중입니다. 해당 프로그램을 종료한 뒤 다시 실행하세요."
     }
     Write-Host "이전 버전 Spatial Audio 서버를 종료하고 v$expectedVersion(으)로 갱신합니다."
@@ -71,7 +99,7 @@ if (Test-Path -LiteralPath $venvPython) {
     $pythonCommand = $venvPython
 }
 else {
-    $pythonCommand = (Get-Command python -ErrorAction Stop).Source
+    throw "Project Python environment was not found. Run Necessary Package Download.cmd first, then launch the app again."
 }
 
 Write-Host "Spatial Audio Essential을 시작하는 중입니다..."

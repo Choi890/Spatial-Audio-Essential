@@ -31,3 +31,7 @@ data/logs/*
 !data/hrtf/sadie-*.json
 !data/hrtf/sadie-*.hrir
 !data/assets-manifest.json
+
+# Local browser verification artifacts
+.playwright-cli/
+output/playwright/

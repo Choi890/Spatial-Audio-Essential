@@ -11,6 +11,14 @@ const sessionStatus = document.querySelector("#session-status");
 
 document.querySelector("#prepare").addEventListener("click", () => prepareSession().catch(showMushraError));
 saveButton.addEventListener("click", saveSession);
+for (const input of document.querySelectorAll('input[type="file"], #eq-condition')) {
+  input.addEventListener("change", () => {
+    if (!session) return;
+    disposeSession();
+    saveButton.disabled = true;
+    sessionStatus.textContent = "입력 설정이 변경되었습니다. 비교를 다시 준비하세요.";
+  });
+}
 
 async function prepareSession() {
   if (!referenceInput.files[0] || !spatialInput.files[0]) {
@@ -123,13 +131,21 @@ function makeCard(record, index) {
     } catch (error) { sessionStatus.textContent = error.message; }
   });
   card.append(title, play);
-  for (const [key, label] of [["externalization","외재화"],["width","좌우 폭"],["depth","앞뒤 깊이"],["timbre","음색 보존"],["artifacts","무왜곡/무아티팩트"]]) {
+  for (const [key, label] of [
+    ["envelopment", "감싸이는 몰입감"], ["externalization", "외재화"], ["width", "좌우 폭"],
+    ["depth", "앞뒤 깊이"], ["vocalClarity", "보컬 선명도와 전방감"],
+    ["bassBalance", "저음 균형"], ["trebleClarity", "고음 선명도"],
+    ["timbre", "음색 보존"], ["artifacts", "무왜곡/무아티팩트"]
+  ]) {
     const wrapper = document.createElement("label");
-    wrapper.append(document.createTextNode(`${label}: 50`));
+    wrapper.append(document.createTextNode(`${label}: 미평가`));
     const slider = document.createElement("input");
     slider.type = "range"; slider.min = "0"; slider.max = "100"; slider.value = "50";
     slider.dataset.metric = key;
-    slider.addEventListener("input", () => { wrapper.firstChild.textContent = `${label}: ${slider.value}`; });
+    slider.addEventListener("input", () => {
+      slider.dataset.scored = "true";
+      wrapper.firstChild.textContent = `${label}: ${slider.value}`;
+    });
     wrapper.append(slider); card.append(wrapper);
   }
   record.card = card;
@@ -152,7 +168,8 @@ function saveSession() {
       filename: record.file.name,
       measurement: record.measurement,
       gainDb: record.gainDb,
-      scores: Object.fromEntries([...record.card.querySelectorAll("input[type=range]")].map(input => [input.dataset.metric, Number(input.value)]))
+      scores: Object.fromEntries([...record.card.querySelectorAll("input[type=range]")].map(input =>
+        [input.dataset.metric, input.dataset.scored === "true" ? Number(input.value) : null]))
     }))
   };
   persistListeningTestResult(result);
@@ -165,7 +182,7 @@ async function createLowpassAnchor(file) {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   const decodeContext = new AudioContextClass();
   try {
-    const decoded = await decodeContext.decodeAudioData((await file.arrayBuffer()).slice(0));
+    const decoded = await decodeContext.decodeAudioData(await file.arrayBuffer());
     const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const context = new OfflineContext(2, decoded.length, decoded.sampleRate);
     const source = context.createBufferSource();
@@ -202,10 +219,11 @@ function encodeMushraWave(buffer) {
   view.setUint16(34, 16, true);
   ascii(36, "data");
   view.setUint32(40, buffer.length * channels * 2, true);
+  const channelData = Array.from({ length: channels }, (_, channel) => buffer.getChannelData(channel));
   let offset = 44;
   for (let frame = 0; frame < buffer.length; frame += 1) {
     for (let channel = 0; channel < channels; channel += 1) {
-      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[frame] || 0));
+      const sample = Math.max(-1, Math.min(1, channelData[channel][frame] || 0));
       view.setInt16(offset, Math.round(sample * (sample < 0 ? 32768 : 32767)), true);
       offset += 2;
     }

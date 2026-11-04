@@ -16,6 +16,24 @@ function wave(seconds = 1, amplitude = 0.1) {
   return { name: 'fixture.wav', mimeType: 'audio/wav', buffer: data };
 }
 
+test('anchor WAV encoding preserves channel order and PCM values', async ({ page }) => {
+  await page.goto('/mushra');
+  const result = await page.evaluate(() => {
+    const data = [new Float32Array([-1, -0.5, 0, 0.5, 1]), new Float32Array([1, 0.5, 0, -0.5, -1])];
+    let reads = 0;
+    const buffer = { numberOfChannels: 2, length: 5, sampleRate: 48000,
+      getChannelData(channel) { reads++; return data[channel]; } };
+    const bytes = encodeMushraWave(buffer);
+    const view = new DataView(bytes);
+    return { reads, channels: view.getUint16(22, true), rate: view.getUint32(24, true),
+      samples: Array.from({ length: 10 }, (_, index) => view.getInt16(44 + index * 2, true)) };
+  });
+  expect(result.reads).toBe(2);
+  expect(result.channels).toBe(2);
+  expect(result.rate).toBe(48000);
+  expect(result.samples).toEqual([-32768, 32767, -16384, 16384, 0, 0, 16384, -16384, 32767, -32768]);
+});
+
 test('measures, matches and switches a six-condition listening session', async ({ page }) => {
   await page.goto('/mushra');
   await page.locator('#reference-file').setInputFiles(wave(2, 0.1));
@@ -42,12 +60,22 @@ test('measures, matches and switches a six-condition listening session', async (
   const position = await page.evaluate(() => activeAudio.currentTime);
   expect(position).toBeGreaterThanOrEqual(0.49);
   expect(position).toBeLessThan(1.2);
+  await page.locator('.evaluation-card').first().locator('input[data-metric="width"]').fill('75');
+  await page.locator('.evaluation-card').first().locator('input[data-metric="envelopment"]').fill('80');
+  await page.locator('.evaluation-card').first().locator('input[data-metric="vocalClarity"]').fill('70');
   await page.locator('#save').click();
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('spatial-audio-essential-listening-history'))[0]);
   expect(saved.schema).toBe('SpatialAudioEssential.ListeningTest/3.0');
   expect(saved.samples).toHaveLength(6);
   expect(saved.eqCondition).toBe('off');
   expect(saved.samples.every(sample => Number.isFinite(sample.gainDb))).toBe(true);
+  expect(saved.samples[0].scores.width).toBe(75);
+  expect(saved.samples[0].scores.envelopment).toBe(80);
+  expect(saved.samples[0].scores.vocalClarity).toBe(70);
+  expect(saved.samples[0].scores.bassBalance).toBeNull();
+  expect(saved.samples[0].scores.trebleClarity).toBeNull();
+  expect(saved.samples[0].scores.depth).toBeNull();
+  expect(saved.samples[1].scores.width).toBeNull();
 });
 
 test('rejects mismatched excerpts and keeps save disabled', async ({ page }) => {
@@ -59,6 +87,19 @@ test('rejects mismatched excerpts and keeps save disabled', async ({ page }) => 
   await expect(page.locator('#save')).toBeDisabled();
   await expect(page.locator('.evaluation-card')).toHaveCount(0);
   await expect(page.locator('#prepare')).toBeEnabled();
+});
+
+test('changing an input invalidates the prepared listening session', async ({ page }) => {
+  await page.goto('/mushra');
+  await page.locator('#reference-file').setInputFiles(wave());
+  await page.locator('#spatial-file').setInputFiles(wave());
+  await page.locator('#prepare').click();
+  await expect(page.locator('.evaluation-card')).toHaveCount(4);
+  await page.locator('#spatial-file').setInputFiles(wave(1, 0.2));
+  await expect(page.locator('.evaluation-card')).toHaveCount(0);
+  await expect(page.locator('#save')).toBeDisabled();
+  await expect(page.locator('#session-status')).toContainText('다시 준비');
+  expect(await page.evaluate(() => session)).toBeNull();
 });
 
 test('does not start an unmeasured session when the meter is unavailable', async ({ page }) => {

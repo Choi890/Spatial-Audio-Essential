@@ -27,9 +27,9 @@
     }
 
     attach(context) {
+      this.detach();
       const capacity = context && context.renderCapacity;
       if (!capacity || typeof capacity.start !== "function") return false;
-      this.detach();
       this.capacity = capacity;
       this.metrics.supported = true;
       if (typeof capacity.addEventListener === "function") {
@@ -47,7 +47,12 @@
     }
 
     detach() {
-      if (!this.capacity) return;
+      if (!this.capacity) {
+        this.metrics.supported = false;
+        this.highWindows = 0;
+        this.lowWindows = 0;
+        return;
+      }
       try {
         if (typeof this.capacity.removeEventListener === "function") {
           this.capacity.removeEventListener("update", this.boundUpdate);
@@ -59,9 +64,19 @@
         // Capacity reporting is optional and must never interrupt playback.
       }
       this.capacity = null;
+      this.metrics.supported = false;
+      this.highWindows = 0;
+      this.lowWindows = 0;
     }
 
     handleUpdate(event = {}, now = (global.performance?.now?.() || Date.now())) {
+      if (![event.averageLoad, event.peakLoad, event.underrunRatio].every(
+        (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+      )) {
+        this.highWindows = 0;
+        this.lowWindows = 0;
+        return this.snapshot();
+      }
       const averageLoad = this.clampMetric(event.averageLoad);
       const peakLoad = this.clampMetric(event.peakLoad);
       const underrunRatio = this.clampMetric(event.underrunRatio);

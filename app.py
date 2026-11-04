@@ -17,18 +17,17 @@ from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from backend.audio_engine import (
+from backend.separation import (
     AnalysisCancelledError,
-    AudioChannelLayoutError,
     DEMUCS_AUXILIARY_MODEL,
-    MAX_BODY_BYTES,
-    analyze_audio_optimized,
-    measure_master_output,
+    build_demucs_cache_id,
 )
+from backend.audio_engine import ANALYSIS_PROFILE_VERSION, MAX_BODY_BYTES, analyze_audio_optimized
+from backend.audio_io import AudioChannelLayoutError, measure_master_output
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -50,8 +49,17 @@ SUPPORTED_DEMUCS_MODELS = frozenset({"htdemucs_ft", "htdemucs"})
 DEMUCS_MODEL = os.environ.get("SPATIAL_SEPARATOR_MODEL", "htdemucs_ft")
 if DEMUCS_MODEL not in SUPPORTED_DEMUCS_MODELS:
     DEMUCS_MODEL = "htdemucs_ft"
-ANALYSIS_PROFILE_VERSION = "fullband-neutral-v6-antialias"
-APP_VERSION = "1.18.0"
+APP_VERSION = "1.19.0"
+
+
+def server_code_fingerprint() -> str:
+    """Identify the Python code loaded by this server process at startup."""
+    paths = [BASE_DIR / "app.py", *sorted((BASE_DIR / "backend").glob("*.py"))]
+    hashes = [hashlib.sha256(path.read_bytes()).hexdigest().upper() for path in paths]
+    return hashlib.sha256("|".join(hashes).encode("ascii")).hexdigest()
+
+
+SERVER_CODE_FINGERPRINT = server_code_fingerprint()
 UPLOAD_CHUNK_WRITE_LIMIT = MAX_BODY_BYTES
 ALLOWED_AUDIO_EXTENSIONS = {
     ".aac",
@@ -152,11 +160,8 @@ async def add_operational_headers(request: Request, call_next):
     if path == "/" or path.endswith(".html"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
     elif path.endswith((".css", ".js")):
-        response.headers["Cache-Control"] = (
-            "public, max-age=31536000, immutable"
-            if request.query_params.get("v")
-            else "no-cache"
-        )
+        # Query versions are human-maintained, not immutable content hashes.
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     elif path.startswith("/outputs/"):
         response.headers["Cache-Control"] = "private, max-age=86400"
     elif path.startswith(("/brir/", "/hrtf/")):
@@ -174,8 +179,21 @@ app.mount("/hrtf", StaticFiles(directory=HRTF_DIR), name="hrtf")
 
 
 @app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+async def index() -> HTMLResponse:
+    # New URLs also recover clients holding the previous year-long JS/CSS cache.
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    def version_asset(match: re.Match[str]) -> str:
+        asset = STATIC_DIR / match["path"]
+        version = hashlib.sha256(asset.read_bytes()).hexdigest()[:16]
+        return f'{match["prefix"]}{match["quote"]}{match["path"]}?v={version}{match["quote"]}'
+
+    html = re.sub(
+        r'(?P<prefix>(?:src|href)=)(?P<quote>[\'"])(?P<path>(?:js/)?[\w.-]+\.(?:js|css))(?:\?[^\'"]*)?(?P=quote)',
+        version_asset,
+        html,
+    )
+    return HTMLResponse(html)
 
 
 @app.get("/styles.css")
@@ -199,6 +217,8 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "service": "Spatial Audio Essential",
         "version": APP_VERSION,
+        "serverCodeFingerprint": SERVER_CODE_FINGERPRINT,
+        "serverRoot": str(BASE_DIR),
         "demucsModel": DEMUCS_MODEL,
         "demucsAuxiliaryModel": DEMUCS_AUXILIARY_MODEL,
         "separatorProvider": {
@@ -277,6 +297,7 @@ async def analyze(
     temporary_path = UPLOAD_DIR / f".{upload_token}.uploading"
     profile_prefix = (
         f"{ANALYSIS_PROFILE_VERSION}|demucs={int(demucs)}|model={demucs_model}"
+        f"|separator={build_demucs_cache_id('configuration', demucs_model) if demucs else 'off'}"
     ).encode("utf-8")
 
     try:

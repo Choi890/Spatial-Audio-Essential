@@ -22,6 +22,14 @@ class SetupLauncherTests(unittest.TestCase):
         self.assertIn("requirements-ml-cpu.txt", installer)
         self.assertIn("tools\\diagnose.py", installer)
 
+    def test_launcher_checks_loaded_server_fingerprint(self) -> None:
+        launcher = (ROOT / "start.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("serverCodeFingerprint", launcher)
+        self.assertIn("Get-FileHash", launcher)
+        self.assertIn("$health.service", launcher)
+        self.assertIn("$health.serverRoot -eq $PSScriptRoot", launcher)
+        self.assertIn("$parentProcess.CommandLine -match $venvPattern", launcher)
+
     def test_cpu_profile_uses_cpu_pytorch_wheels(self) -> None:
         requirements = (ROOT / "requirements-ml-cpu.txt").read_text(encoding="utf-8")
         self.assertIn("https://download.pytorch.org/whl/cpu", requirements)

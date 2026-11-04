@@ -42,10 +42,20 @@ test('silent and empty analysis returns finite bounded metrics', () => {
     const result = quality.analyzeBinauralResponse(input);
     assert.equal(result.iacc80, 0);
     assert.equal(result.iaccLate, 0);
+    assert.equal(result.listenerEnvelopment, 0);
+    assert.equal(result.lateFieldPresent, false);
     for (const band of quality.analyzeMultibandCoherence(input).bands) {
       assert.ok(Number.isFinite(band.levelDb));
     }
   }
+});
+
+test('one silent ear cannot produce a meaningful late binaural metric', () => {
+  const left = tone(1, 440);
+  const right = new Float32Array(left.length);
+  const result = quality.analyzeBinauralResponse(buffer(left, right));
+  assert.equal(result.lateFieldPresent, false);
+  assert.equal(result.listenerEnvelopment, 0);
 });
 
 test('long-track level estimate does not sample a periodic tone only at zero crossings', () => {

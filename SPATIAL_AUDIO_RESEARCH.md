@@ -1,5 +1,7 @@
 # Spatial Audio Essential — 연구 적용 기록
 
+> 이 문서는 v122까지의 이전 직접음 통과 구조를 기록한 자료다. 현재 v123의 직접음 바이노럴 렌더링·독립 후기장·검증 기준은 [BINAURAL_SCENE_RESEARCH.md](BINAURAL_SCENE_RESEARCH.md)를 따른다. 아래의 0ms 위상 보존 primary 규칙은 현재 Full Spatial에 적용하지 않는다.
+
 ## 범위
 
 이 문서의 문헌 적용은 설계 근거이며, 해당 논문의 지각적 개선 결과가 본 시스템에서도 재현되었다는 뜻은 아닙니다. 현재 구현은 연구용 프로토타입입니다. 직접음에서는 `stem 합 + (원본 − stem 합) = 원본`이 성립하도록 구성하지만, 공간 효과와 기기 EQ가 포함된 최종 출력의 위상·음색 보존을 보장하지 않습니다. Demucs의 기여를 검증할 비교 조건과 청취 절차는 [EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md)를 참고하세요.

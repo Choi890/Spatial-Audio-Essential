@@ -2,7 +2,7 @@
   "schema": "SpatialAudioEssential.GoldenRenderer/1.0",
   "renderedPeak": [0.1, 1.0],
   "renderedRmsMinimum": 0.03,
-  "lateralWidthRatio": [1.1, 2.0],
+  "lateralWidthRatio": [0.5, 1.35],
   "stereoCorrelation": [-0.35, 0.95],
   "outputTrim": [0.88, 1.0]
 }

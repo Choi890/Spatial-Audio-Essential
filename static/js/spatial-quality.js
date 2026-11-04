@@ -104,47 +104,6 @@
     return Object.freeze({ bands: Object.freeze(results), averageCorrelation, stereo: buffer.numberOfChannels > 1 });
   }
 
-  function analyzeTransientMap(buffer, options = {}) {
-    const left = channelData(buffer, 0);
-    const right = channelData(buffer, 1) || left;
-    if (!left || !right) return Object.freeze({ events: Object.freeze([]), density: 0, strength: 0 });
-    const sampleRate = buffer.sampleRate || 48000;
-    const frameSize = Math.max(64, Math.round((options.frameSeconds || 0.008) * sampleRate));
-    const hopSize = Math.max(32, Math.round((options.hopSeconds || 0.004) * sampleRate));
-    const minimumGap = Math.max(1, Math.round((options.minimumGapSeconds || 0.075) * sampleRate / hopSize));
-    const events = [];
-    let previous = 0;
-    let moving = 1e-6;
-    let lastEventFrame = -minimumGap;
-    let frameIndex = 0;
-    let strengthSum = 0;
-    for (let start = 0; start + frameSize < buffer.length; start += hopSize, frameIndex += 1) {
-      let energy = 0;
-      for (let index = start; index < start + frameSize; index += 16) {
-        const l = left[index] || 0;
-        const r = right[index] || 0;
-        energy += l * l + r * r;
-      }
-      const rms = Math.sqrt(energy / Math.max(1, frameSize * 0.125));
-      moving = moving * 0.94 + rms * 0.06;
-      const flux = Math.max(0, rms - previous);
-      const normalized = flux / Math.max(1e-5, moving);
-      if (normalized > 0.34 && rms > 0.004 && frameIndex - lastEventFrame >= minimumGap) {
-        const strength = clamp((normalized - 0.2) / 1.4, 0.12, 1);
-        events.push(Object.freeze({ time: start / sampleRate, strength }));
-        strengthSum += strength;
-        lastEventFrame = frameIndex;
-      }
-      previous = rms;
-    }
-    const duration = Math.max(0.001, buffer.duration || buffer.length / sampleRate);
-    return Object.freeze({
-      events: Object.freeze(events),
-      density: events.length / duration,
-      strength: events.length ? strengthSum / events.length : 0
-    });
-  }
-
   function normalizedCrossCorrelation(left, right, start, end, maximumLag) {
     let best = 0;
     for (let lag = -maximumLag; lag <= maximumLag; lag += 1) {
@@ -180,12 +139,9 @@
     let lateEnergy = 0;
     let clarityEarly = 0;
     let clarityLate = 0;
-    const directWindow = Math.min(length, Math.round(sampleRate * 0.08));
-    const clarityWindow = Math.min(length, Math.round(sampleRate * 0.05));
     for (let index = 0; index < length; index += 1) {
       const l = left[index] || 0;
       const r = right[index] || 0;
-      const energy = l * l + r * r;
       const samplePeak = Math.max(Math.abs(l), Math.abs(r));
       if (samplePeak > peak) {
         peak = samplePeak;
@@ -193,10 +149,6 @@
       }
       leftEnergy += l * l;
       rightEnergy += r * r;
-      if (index < directWindow) earlyEnergy += energy;
-      else lateEnergy += energy;
-      if (index < clarityWindow) clarityEarly += energy;
-      else clarityLate += energy;
     }
     const onsetThreshold = peak * 0.12;
     for (let index = 0; index <= onsetIndex; index += 1) {
@@ -223,7 +175,16 @@
     }
     const iacc80 = normalizedCrossCorrelation(left, right, onsetIndex, earlyEnd, Math.round(sampleRate * 0.001));
     const lateEnd = Math.min(length, earlyEnd + Math.round(sampleRate * 1.5));
-    const iaccLate = normalizedCrossCorrelation(left, right, earlyEnd, lateEnd, Math.round(sampleRate * 0.001));
+    let lateLeftEnergy = 0;
+    let lateRightEnergy = 0;
+    for (let index = earlyEnd; index < lateEnd; index += 1) {
+      lateLeftEnergy += (left[index] || 0) ** 2;
+      lateRightEnergy += (right[index] || 0) ** 2;
+    }
+    const lateFieldPresent = lateLeftEnergy > 1e-12 && lateRightEnergy > 1e-12;
+    const iaccLate = lateLeftEnergy === 0 || lateRightEnergy === 0
+      ? 0
+      : normalizedCrossCorrelation(left, right, earlyEnd, lateEnd, Math.round(sampleRate * 0.001));
     const decay = estimateEnergyDecay(left, right, onsetIndex, sampleRate);
     const bandIacc = analyzeBandIacc(left, right, onsetIndex, earlyEnd, sampleRate);
     return Object.freeze({
@@ -232,7 +193,9 @@
       iacc80,
       iaccLate,
       apparentWidth: clamp(1 - Math.max(0, iacc80), 0, 1),
-      listenerEnvelopment: clamp(1 - Math.max(0, iaccLate), 0, 1),
+      // This is an IACC-derived proxy, not a listener rating. Silence has no field.
+      listenerEnvelopment: lateFieldPresent ? clamp(1 - Math.max(0, iaccLate), 0, 1) : 0,
+      lateFieldPresent,
       drrDb: 10 * Math.log10(Math.max(1e-12, earlyEnergy) / Math.max(1e-12, lateEnergy)),
       c50Db: 10 * Math.log10(Math.max(1e-12, clarityEarly) / Math.max(1e-12, clarityLate)),
       c80Db: 10 * Math.log10(
@@ -359,7 +322,6 @@
     DEFAULT_BANDS,
     analyzeBinauralResponse,
     analyzeMultibandCoherence,
-    analyzeTransientMap,
     buildSafetyProfile,
     compareRenderedToReference,
     estimateLevelDb

@@ -27,6 +27,23 @@ class FakeStreamingRequest:
 
 
 class AppBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_health_identifies_loaded_backend_code(self) -> None:
+        health = await spatial_app.health()
+        self.assertEqual(health["serverRoot"], str(spatial_app.BASE_DIR))
+        self.assertEqual(health["serverCodeFingerprint"], spatial_app.SERVER_CODE_FINGERPRINT)
+        self.assertEqual(health["serverCodeFingerprint"], spatial_app.server_code_fingerprint())
+        self.assertEqual(len(health["serverCodeFingerprint"]), 64)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "backend").mkdir()
+            (root / "app.py").write_bytes(b"app")
+            source = root / "backend" / "engine.py"
+            source.write_bytes(b"first")
+            with patch.object(spatial_app, "BASE_DIR", root):
+                previous = spatial_app.server_code_fingerprint()
+                source.write_bytes(b"second")
+                self.assertNotEqual(previous, spatial_app.server_code_fingerprint())
+
     def test_stale_analysis_profile_cache_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             cache_root = Path(temp)
